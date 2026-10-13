@@ -1,12 +1,12 @@
 /* TOLD service worker: keeps the app and its fonts on the phone so it opens with no signal. */
-const CACHE = 'told-v1';
+const CACHE = 'told-v3';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'];
 const FONT_CSS = 'https://fonts.googleapis.com/css2?family=B612:wght@400;700&family=B612+Mono:wght@400;700&display=swap';
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);
-    await cache.addAll(SHELL);
+    await cache.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })));
     // Fonts are optional: if they can't be fetched, the app falls back to the phone's own fonts.
     try {
       const res = await fetch(FONT_CSS, { mode: 'cors' });
@@ -56,7 +56,7 @@ self.addEventListener('fetch', (event) => {
     }
 
     // App files: answer from the phone straight away, refresh the copy in the background.
-    const network = fetch(req).then((res) => {
+    const network = fetch(req.mode === 'navigate' ? './index.html' : req.url, { cache: 'no-cache' }).then((res) => {
       if (res.ok) cache.put(key, res.clone());
       return res;
     }).catch(() => null);

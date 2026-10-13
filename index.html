@@ -136,6 +136,12 @@ button, input, textarea { font: inherit; color: inherit; }
 .val[data-src="calc"]::after { background: var(--s-calc); }
 .val[data-src="edit"]::after { background: var(--caution); }
 .val .unit { position: absolute; right: 10px; bottom: 6px; font-size: 10px; color: var(--muted); pointer-events: none; }
+.val.has-note { flex-direction: column; align-items: stretch; }
+.val.has-note input { min-height: 40px; padding-bottom: 0; }
+.val.has-note .unit { top: 10px; bottom: auto; right: 18px; }
+.val .note { padding: 0 10px 7px; font-size: 10.5px; line-height: 1.3; color: var(--muted); font-family: var(--font-ui); }
+.val .note.warn { color: var(--caution); }
+.val.has-note .note:empty { display: none; }
 .val.split { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
 .val.split input + input { border-left: 1px dashed var(--line); }
 
@@ -251,7 +257,7 @@ dialog::backdrop { background: rgba(4, 8, 12, 0.6); }
     <span style="--c:var(--s-calc)"><i></i>Calculated</span>
     <span style="--c:var(--s-calc)"><i class="ring"></i>Will calculate once data is added</span>
   </div>
-  <p class="foot">Weights and fuel are in thousands of lb. Everything saves on this iPad as you type. Check every figure against your approved performance data. <span id="offlineState"></span></p>
+  <p class="foot">Weights and fuel are in thousands of lb. Everything saves on this iPad as you type. Check every figure against your approved performance data. <span id="offlineState"></span> <span id="appVersion"></span></p>
 </div>
 
 <dialog id="importDlg" aria-labelledby="impTitle">
@@ -405,11 +411,134 @@ const OfpReader = (() => {
 })();
 if (typeof module !== 'undefined') module.exports = OfpReader;
 
+/* Takeoff Reference Initial Pitch, 747-8F (degrees).
+   Source: NCA AOR tables, pages 4-1 to 4-4 (TO2/F10 Rev.20, TO1/F10 Rev.18, TO/F10 Rev.20, TO/F20 Rev.17).
+   Rows are temperature: 30 = "OAT below 30 °C without AT"; 35-50 = OAT without AT or any OAT with that AT;
+   55 and 60 = assumed temperature only. null = shaded (not applicable, performance limit).
+   Tables assume A/C ON, A/I OFF, gear up, V2+10 kt, sea-level pressure altitude. Interpolation allowed. */
+const PitchTables = (() => {
+  const T = {
+    'TO/10': {
+      page: '4-3', w: [600, 650, 700, 750, 800, 850, 900, 950],
+      rows: {
+        30: [21.9, 20.6, 19.4, 18.3, 17.3, 16.5, 15.8, 15.1],
+        35: [21.3, 20.0, 18.8, 17.7, 16.8, 16.0, 15.2, 14.6],
+        40: [20.3, 19.1, 17.9, 16.9, 16.0, 15.3, 14.6, null],
+        45: [19.4, 18.2, 17.1, 16.2, 15.3, 14.6, null, null],
+        50: [18.6, 17.4, 16.4, 15.5, 14.7, 14.0, null, null],
+        55: [17.8, 16.7, 15.7, 14.8, 14.1, null, null, null],
+        60: [17.3, 16.3, 15.3, 14.5, 13.8, null, null, null]
+      },
+      palt: [-0.3, -0.3, -0.3, -0.2, -0.2, -0.2, -0.2, -0.2],
+      acOff: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]
+    },
+    'TO1/10': {
+      page: '4-2', w: [550, 600, 650, 700, 750, 800, 850, 900, 950],
+      rows: {
+        30: [21.4, 19.9, 18.6, 17.5, 16.5, 15.6, 14.9, 14.2, 13.6],
+        35: [20.8, 19.4, 18.1, 17.0, 16.0, 15.2, 14.5, 13.9, null],
+        40: [20.1, 18.7, 17.5, 16.4, 15.5, 14.8, 14.1, null, null],
+        45: [19.2, 17.9, 16.7, 15.7, 14.9, 14.1, null, null, null],
+        50: [18.4, 17.1, 16.0, 15.1, 14.3, 13.6, null, null, null],
+        55: [17.6, 16.4, 15.4, 14.5, 13.7, null, null, null, null],
+        60: [17.0, 15.9, 14.9, 14.0, 13.3, null, null, null, null]
+      },
+      palt: [-0.3, -0.3, -0.2, -0.2, -0.2, -0.2, -0.2, -0.1, -0.1],
+      acOff: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]
+    },
+    'TO2/10': {
+      page: '4-1', w: [450, 500, 550, 600, 650, 700, 750, 800, 850],
+      rows: {
+        30: [22.9, 21.1, 19.5, 18.1, 16.9, 15.9, 15.0, 14.3, 13.6],
+        35: [22.3, 20.5, 18.9, 17.6, 16.4, 15.5, 14.6, 13.9, null],
+        40: [21.6, 19.9, 18.4, 17.1, 16.0, 15.0, 14.2, 13.5, null],
+        45: [20.6, 19.0, 17.6, 16.3, 15.3, 14.4, 13.7, null, null],
+        50: [19.8, 18.2, 16.8, 15.7, 14.7, 13.9, 13.1, null, null],
+        55: [18.9, 17.4, 16.1, 15.0, 14.1, 13.3, null, null, null],
+        60: [18.3, 16.8, 15.6, 14.5, 13.7, 12.9, null, null, null]
+      },
+      palt: [-0.3, -0.3, -0.3, -0.2, -0.2, -0.2, -0.2, -0.2, -0.1],
+      acOff: [0.3, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]
+    },
+    'TO/20': {
+      page: '4-4', w: [700, 750, 800, 850, 900, 950, 987],
+      rows: {
+        30: [16.8, 15.7, 14.8, 13.9, 13.2, 12.6, 12.1],
+        35: [16.2, 15.2, 14.3, 13.5, 12.7, 12.1, 11.7],
+        40: [15.4, 14.4, 13.5, 12.8, 12.1, 11.5, 11.1],
+        45: [14.6, 13.7, 12.8, 12.1, 11.5, 10.9, null],
+        50: [13.9, 13.0, 12.2, 11.5, 10.9, null, null],
+        55: [13.2, 12.3, 11.6, 10.9, null, null, null],
+        60: [12.8, 12.0, 11.2, 10.6, null, null, null]
+      },
+      palt: [-0.2, -0.2, -0.2, -0.2, -0.2, -0.2, -0.2],
+      acOff: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]
+    }
+  };
+  const TEMPS = [30, 35, 40, 45, 50, 55, 60];
+  const r1 = (x) => Math.round(x * 10 + 1e-9) / 10;
+
+  // Linear interpolation along the weight columns. Returns null if a needed cell is shaded.
+  function alongW(ws, vals, w) {
+    for (let i = 0; i < ws.length; i++) {
+      if (w === ws[i]) return vals[i];
+      if (i < ws.length - 1 && w > ws[i] && w < ws[i + 1]) {
+        if (vals[i] == null || vals[i + 1] == null) return null;
+        return vals[i] + (vals[i + 1] - vals[i]) * (w - ws[i]) / (ws[i + 1] - ws[i]);
+      }
+    }
+    return null;
+  }
+
+  /* o: thr ('TO'|'TO1'|'TO2'), flap ('10'|'20'), tow (lb), at (°C or null), oat (°C or null),
+        palt (ft or null), packsOff (bool) */
+  function pitch(o) {
+    const key = `${o.thr}/${o.flap}`;
+    if (!o.thr || !o.flap) return { error: 'Select THR and FLAP' };
+    const t = T[key];
+    if (!t) return { error: `No pitch table for ${o.thr} flap ${o.flap}` };
+    if (!(o.tow > 0)) return { error: 'Enter T/O weight' };
+    const hasAt = o.at != null && o.at !== '' && isFinite(o.at);
+    const hasOat = o.oat != null && o.oat !== '' && isFinite(o.oat);
+    if (!hasAt && !hasOat) return { error: 'Enter OAT or assumed temp' };
+    const temp = hasAt ? Number(o.at) : Number(o.oat);
+    const w = o.tow / 1000;
+    const wMin = t.w[0], wMax = t.w[t.w.length - 1];
+    if (w < wMin - 1e-9 || w > wMax + 1e-9) return { error: `Weight outside table (${wMin}–${wMax})`, key };
+    if (!hasAt && temp > 50) return { error: 'OAT above 50 °C without AT is outside the table', key };
+    if (temp > 60) return { error: 'Temperature above 60 °C is outside the table', key };
+
+    const tt = Math.max(30, temp); // the 30 row covers everything at or below 30 °C
+    let base;
+    const exact = TEMPS.indexOf(tt);
+    if (exact >= 0) base = alongW(t.w, t.rows[tt], w);
+    else {
+      const hi = TEMPS.findIndex((x) => x > tt);
+      const t0 = TEMPS[hi - 1], t1 = TEMPS[hi];
+      const a = alongW(t.w, t.rows[t0], w), b = alongW(t.w, t.rows[t1], w);
+      base = a == null || b == null ? null : a + (b - a) * (tt - t0) / (t1 - t0);
+    }
+    if (base == null) return { error: 'Not applicable at this weight and temperature (shaded area)', key };
+
+    const palt = o.palt != null && o.palt !== '' && isFinite(o.palt) ? Number(o.palt) : null;
+    const per500 = alongW(t.w, t.palt, w);
+    const cAlt = palt != null && palt > 0 ? per500 * (palt / 500) : 0;
+    const cAc = o.packsOff ? alongW(t.w, t.acOff, w) : 0;
+    return {
+      value: r1(base + cAlt + cAc), base: r1(base), cAlt: Math.round(cAlt * 100) / 100, cAc,
+      key, page: t.page, temp, usedAt: hasAt, paltMissing: palt == null
+    };
+  }
+  return { pitch, tables: T };
+})();
+if (typeof module !== 'undefined') module.exports = PitchTables;
+
 (() => {
   'use strict';
   const R = OfpReader;
   const $ = (id) => document.getElementById(id);
   const KEY = 'told:v1';
+  const VERSION = 'App v3 · pitch tables Rev.17–20';
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   /* ---------- Boxes (from Kevin's field map) ---------- */
@@ -433,7 +562,10 @@ if (typeof module !== 'undefined') module.exports = OfpReader;
     fup: { label: "TOW F UP SPD (10 000')", type: 'num', unit: 'kt' },
     atis: { label: 'ATIS', type: 'text' },
     g13: { label: '1.3G ALT', type: 'text' },
-    pitch: { label: 'T/O Pitch', type: 'num', unit: '°', pending: true },
+    oat: { label: 'OAT', type: 'num', unit: '°C' },
+    palt: { label: 'P.ALT', type: 'num', unit: 'ft' },
+    packs: { label: 'A/C', type: 'seg', opts: ['ON', 'OFF'] },
+    pitch: { label: 'T/O Pitch', type: 'num', unit: '°', calc: true },
     gradAll: { label: 'Climb grad all eng', type: 'num', unit: '%', pending: true },
     trim: { label: 'Stab trim', type: 'num' },
     gradOei: { label: 'Climb grad one eng inop', type: 'num', unit: '%', pending: true },
@@ -460,7 +592,8 @@ if (typeof module !== 'undefined') module.exports = OfpReader;
   const TO_ROWS = [
     { hdr: true, cells: ['flt', 'std', 'sta'] },
     ['thr', 'tflap'], ['derate', 'nadp'], ['zfw', 'spot'], ['fob', 'altn1'], ['tow', 'altn2'],
-    ['fod', 'rsvAltn'], ['ldw', 'fup'], ['atis', 'g13'], ['pitch', 'gradAll'], ['trim', 'gradOei'],
+    ['fod', 'rsvAltn'], ['ldw', 'fup'], ['atis', 'g13'],
+    { compact: true, cells: ['oat', 'palt', 'packs'] }, ['pitch', 'gradAll'], ['trim', 'gradOei'],
     { compact: true, cells: ['v1', 'vr', 'v2', 'n1'] },
     ['pld', 'sg'], ['dd', 'oeiSpd'], 'checks'
   ];
@@ -526,6 +659,21 @@ if (typeof module !== 'undefined') module.exports = OfpReader;
     if (s.fpv[k] != null) return String(s.fpv[k]) === String(s.v[k]) ? 'fp' : 'edit';
     return 'user';
   }
+  const numOrNull = (x) => { const n = parseFloat(x); return isFinite(n) ? n : null; };
+  function computePitch(s) {
+    return PitchTables.pitch({
+      thr: s.v.thr, flap: s.v.tflap, tow: s.v.tow,
+      at: numOrNull(s.v.derate), oat: numOrNull(s.v.oat), palt: numOrNull(s.v.palt), packsOff: s.v.packs === 'OFF'
+    });
+  }
+  function pitchNote(r) {
+    if (r.error) return { text: r.error, warn: true };
+    const bits = [`${r.key.replace('/', ' F')} · ${r.usedAt ? 'AT' : 'OAT'} ${r.temp} · table ${r.base.toFixed(1)}`];
+    if (r.cAlt) bits.push(`alt ${r.cAlt > 0 ? '+' : ''}${r.cAlt.toFixed(2)}`);
+    if (r.cAc) bits.push(`A/C off +${r.cAc.toFixed(1)}`);
+    if (r.paltMissing) return { text: bits.join(' · ') + ' · P.ALT not set, sea level used', warn: true };
+    return { text: bits.join(' · '), warn: false };
+  }
   function computeVapp(s) {
     const vref = s.v.lflap === '25' ? s.v.vref25 : s.v.lflap === '30' ? s.v.vref30 : null;
     const a = parseFloat(vref), b = parseFloat(s.v.vadd);
@@ -541,7 +689,7 @@ if (typeof module !== 'undefined') module.exports = OfpReader;
   }
   function pairHTML(id, card) {
     const f = F[id];
-    const dot = f.calc || f.pending ? '<i class="src calc" aria-hidden="true"></i>' : '';
+    const dot = f.pending ? '<i class="src calc" aria-hidden="true"></i>' : '';
     let val;
     if (f.type === 'seg') {
       val = `<div class="val"><div class="seg" role="group" aria-label="${esc(f.label)}">${f.opts.map((o) => `<button type="button" data-k="${id}" data-opt="${esc(o)}" aria-pressed="false">${esc(o)}</button>`).join('')}</div></div>`;
@@ -549,7 +697,8 @@ if (typeof module !== 'undefined') module.exports = OfpReader;
       val = `<div class="val split" data-cell="${id}">${inputHTML(id + 'C', card, { ph: 'Apt' })}${inputHTML(id + 'F', card, { ph: 'Fuel' })}</div>`;
     } else {
       const ph = f.calc ? 'Auto' : f.pending ? 'Type' : f.ph || '';
-      val = `<div class="val" data-cell="${id}">${inputHTML(id, card, { ph })}${f.unit ? `<span class="unit">${esc(f.unit)}</span>` : ''}</div>`;
+      const note = f.calc ? `<span class="note" id="${card}-note-${id}"></span>` : '';
+      val = `<div class="val${f.calc ? ' has-note' : ''}" data-cell="${id}">${inputHTML(id, card, { ph })}${f.unit ? `<span class="unit">${esc(f.unit)}</span>` : ''}${note}</div>`;
     }
     return `<div class="pair"><label class="lab" for="${card}-${f.type === 'altn' ? id + 'C' : id}">${dot}${esc(f.label)}</label>${val}</div>`;
   }
@@ -575,11 +724,18 @@ if (typeof module !== 'undefined') module.exports = OfpReader;
     document.querySelectorAll('input[data-k]').forEach((inp) => {
       const k = inp.dataset.k;
       const cell = inp.closest('.val');
-      if (k === 'vapp') {
-        const over = s.v.vapp != null && s.v.vapp !== '';
-        const calc = computeVapp(s);
-        if (document.activeElement !== inp) inp.value = over ? s.v.vapp : calc == null ? '' : String(calc);
+      if (k === 'vapp' || k === 'pitch') {
+        const over = s.v[k] != null && s.v[k] !== '';
+        let calc, note;
+        if (k === 'vapp') { calc = computeVapp(s); calc = calc == null ? null : String(calc); note = { text: calc == null ? 'Needs flap, VREF and VREF ADD' : 'VREF ' + s.v.lflap + ' + ADD', warn: false }; }
+        else { const r = computePitch(s); calc = r.value == null ? null : r.value.toFixed(1); note = pitchNote(r); }
+        if (document.activeElement !== inp) inp.value = over ? s.v[k] : calc == null ? '' : calc;
         cell.dataset.src = over ? 'user' : calc == null ? '' : 'calc';
+        const n = cell.querySelector('.note');
+        if (n) {
+          n.textContent = over ? `Typed over. Calculated: ${calc == null ? 'n/a' : calc}` : note.text;
+          n.classList.toggle('warn', !over && note.warn);
+        }
         return;
       }
       if (document.activeElement !== inp) inp.value = displayOf(s, k);
@@ -801,6 +957,7 @@ if (typeof module !== 'undefined') module.exports = OfpReader;
   /* ---------- Offline ---------- */
   const isApp = !!document.querySelector('link[rel="manifest"]');
   const standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+  $('appVersion').textContent = VERSION;
   if (isApp && 'serviceWorker' in navigator) {
     $('offlineState').textContent = 'Saving for offline use…';
     navigator.serviceWorker.register('sw.js')
