@@ -1,0 +1,821 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TOLD Card</title>
+<meta name="description" content="Take-off and landing data card. Paste the flight plan to fill it. Works offline.">
+<meta name="theme-color" content="#0A1017">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TOLD">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=B612:wght@400;700&family=B612+Mono:wght@400;700&display=swap">
+<style>
+:root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+html, body { margin: 0; }
+[hidden] { display: none !important; }
+
+/* Layout: iPad-first card grid that mirrors the paper TOLD card (label cell + value cell pairs, row by row).
+   Take-off and Landing as tabs, side by side on wide landscape screens. Same cockpit palette as Crew Rest:
+   flight plan values periwinkle, typed values cyan, calculated values green, cautions amber. */
+:root {
+  --bg: #0A1017; --panel: #111A24; --panel-2: #172330; --line: #26384A;
+  --fg: #E4EBF1; --muted: #8597A8; --accent: #72CFE0;
+  --s-in: #72CFE0; --s-fp: #A4B6FF; --s-calc: #8FD8A2; --caution: #F0B45A;
+  --on-c: #08111A;
+  --font-ui: "B612", Roboto, "Segoe UI", system-ui, sans-serif;
+  --font-data: "B612 Mono", "Roboto Mono", "SFMono-Regular", ui-monospace, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #EDF1F5; --panel: #FFFFFF; --panel-2: #E6ECF2; --line: #C6D1DC;
+    --fg: #0D1824; --muted: #536476; --accent: #08788D;
+    --s-in: #0B7E93; --s-fp: #4A5BC6; --s-calc: #2D8549; --caution: #9A5D00;
+    --on-c: #FFFFFF;
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #EDF1F5; --panel: #FFFFFF; --panel-2: #E6ECF2; --line: #C6D1DC;
+  --fg: #0D1824; --muted: #536476; --accent: #08788D;
+  --s-in: #0B7E93; --s-fp: #4A5BC6; --s-calc: #2D8549; --caution: #9A5D00;
+  --on-c: #FFFFFF;
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --bg: #0A1017; --panel: #111A24; --panel-2: #172330; --line: #26384A;
+  --fg: #E4EBF1; --muted: #8597A8; --accent: #72CFE0;
+  --s-in: #72CFE0; --s-fp: #A4B6FF; --s-calc: #8FD8A2; --caution: #F0B45A;
+  --on-c: #08111A;
+  color-scheme: dark;
+}
+
+body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 14px; line-height: 1.4; -webkit-tap-highlight-color: transparent; }
+*, *::before, *::after { box-sizing: border-box; }
+button, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.app { max-width: 1400px; margin: 0 auto; padding-inline: 16px; padding-block: 10px 40px; display: grid; gap: 12px; }
+
+/* Top bar */
+.top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 8px; flex: none; }
+.brand svg { width: 26px; height: 26px; }
+.brand span { font-weight: 700; letter-spacing: 0.22em; font-size: 14px; }
+.tabs { display: flex; gap: 6px; overflow-x: auto; flex: 1; min-width: 0; scrollbar-width: none; padding: 2px; }
+.tabs::-webkit-scrollbar { display: none; }
+.stab {
+  flex: none; border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+  border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: 13px; white-space: nowrap;
+  font-family: var(--font-data);
+}
+.stab[aria-current="true"] { color: var(--fg); border-color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+.icon-btn { flex: none; width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); display: grid; place-items: center; cursor: pointer; }
+.icon-btn svg { width: 18px; height: 18px; }
+
+/* Sector bar */
+.sbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.stitle { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.stitle h1 { margin: 0; font-family: var(--font-data); font-size: 22px; letter-spacing: 0.02em; }
+.stitle span { color: var(--muted); font-size: 13px; font-family: var(--font-data); }
+.sact { display: flex; gap: 8px; align-items: center; }
+.btn { border: 0; border-radius: 9px; padding: 10px 16px; background: var(--accent); color: var(--bg); font-weight: 700; cursor: pointer; }
+.btn-ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+.btn-warn { background: var(--caution); color: var(--bg); }
+
+.cardtabs { display: inline-flex; gap: 3px; padding: 3px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; justify-self: start; }
+.cardtabs button { border: 0; background: transparent; color: var(--muted); padding: 8px 18px; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 13px; letter-spacing: 0.06em; }
+.cardtabs button[aria-selected="true"] { background: var(--panel); color: var(--accent); box-shadow: 0 0 0 1px var(--line); }
+
+.cards { display: grid; gap: 16px; align-items: start; }
+@media (min-width: 1180px) {
+  .cards { grid-template-columns: 1fr 1fr; }
+  .cardtabs { display: none; }
+  .cards > .card[hidden] { display: block !important; }
+}
+
+/* The card */
+.card { background: var(--panel); border: 1.5px solid var(--fg); border-radius: 4px; overflow: hidden; min-width: 0; }
+.card-cap { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: var(--panel-2); border-bottom: 1.5px solid var(--fg); font-size: 11px; font-weight: 700; letter-spacing: 0.16em; color: var(--muted); text-transform: uppercase; }
+.row { display: grid; grid-template-columns: repeat(var(--n, 2), minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
+.row:last-child { border-bottom: 0; }
+.pair { display: grid; grid-template-columns: minmax(7.2em, 40%) minmax(0, 1fr); min-width: 0; }
+.pair + .pair { border-left: 1px solid var(--line); }
+.row.compact .pair { grid-template-columns: minmax(3.2em, 34%) minmax(0, 1fr); }
+.lab {
+  background: var(--panel-2); color: var(--muted);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 6px 8px; display: flex; align-items: center; gap: 6px;
+  border-right: 1px solid var(--line); min-width: 0; overflow-wrap: anywhere; line-height: 1.2;
+}
+.lab .src { width: 7px; height: 7px; border-radius: 50%; flex: none; background: transparent; border: 1.5px solid transparent; }
+.lab .src.calc { border-color: var(--s-calc); }
+.val { position: relative; display: flex; align-items: center; min-width: 0; min-height: 52px; }
+.val input {
+  width: 100%; min-width: 0; height: 100%; min-height: 52px;
+  border: 0; background: transparent;
+  padding: 6px 10px;
+  font-family: var(--font-data); font-size: 20px; font-variant-numeric: tabular-nums;
+  color: var(--s-in); text-transform: uppercase;
+}
+.val input::placeholder { color: var(--muted); opacity: 0.45; font-size: 13px; text-transform: none; font-family: var(--font-ui); }
+.val input:focus { outline: none; background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.val[data-src="fp"] input { color: var(--s-fp); }
+.val[data-src="calc"] input { color: var(--s-calc); }
+.val[data-src="fp"]::after, .val[data-src="calc"]::after, .val[data-src="edit"]::after {
+  content: ""; position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%;
+}
+.val[data-src="fp"]::after { background: var(--s-fp); }
+.val[data-src="calc"]::after { background: var(--s-calc); }
+.val[data-src="edit"]::after { background: var(--caution); }
+.val .unit { position: absolute; right: 10px; bottom: 6px; font-size: 10px; color: var(--muted); pointer-events: none; }
+.val.split { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
+.val.split input + input { border-left: 1px dashed var(--line); }
+
+.hdr .pair:first-child .lab { background: var(--panel-2); font-size: 18px; letter-spacing: 0.04em; color: var(--fg); justify-content: center; }
+.hdr .pair:first-child .val { background: color-mix(in srgb, var(--s-fp) 22%, var(--panel)); }
+.hdr .pair:first-child input { font-size: 24px; font-weight: 700; }
+
+.seg { display: flex; width: 100%; height: 100%; padding: 6px; gap: 6px; }
+.seg button {
+  flex: 1; min-height: 40px; border: 1px solid var(--line); border-radius: 7px;
+  background: transparent; color: var(--muted); cursor: pointer;
+  font-family: var(--font-data); font-size: 16px; font-weight: 700;
+}
+.seg button[aria-pressed="true"] { background: var(--s-in); border-color: var(--s-in); color: var(--on-c); }
+
+.checks { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; }
+.ck {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--line); border-radius: 999px; padding: 7px 12px 7px 9px;
+  background: transparent; color: var(--muted); cursor: pointer; font-size: 13px;
+}
+.ck::before { content: ""; width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid var(--muted); flex: none; }
+.ck[aria-pressed="true"] { color: var(--fg); border-color: var(--s-calc); }
+.ck[aria-pressed="true"]::before { border-color: var(--s-calc); background: var(--s-calc); box-shadow: inset 0 0 0 2.5px var(--panel); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); padding-inline: 2px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.legend i.ring { background: transparent; border: 1.5px solid var(--c); }
+.foot { font-size: 12px; color: var(--muted); max-width: 70ch; margin: 0; }
+
+/* Phone widths: pairs stack */
+@media (max-width: 640px) {
+  .row { grid-template-columns: minmax(0, 1fr); }
+  .row.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pair + .pair { border-left: 0; border-top: 1px solid var(--line); }
+  .row.compact .pair:nth-child(2n) { border-left: 1px solid var(--line); }
+  .row.compact .pair:nth-child(2) { border-top: 0; }
+  .val input { font-size: 18px; }
+}
+
+/* Dialogs */
+dialog {
+  border: 1px solid var(--line); border-radius: 14px; padding: 0;
+  background: var(--panel); color: var(--fg);
+  width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 48px);
+}
+dialog::backdrop { background: rgba(4, 8, 12, 0.6); }
+.dlg { display: grid; gap: 12px; padding: 18px; }
+.dlg h2 { margin: 0; font-size: 16px; }
+.dlg p { margin: 0; color: var(--muted); font-size: 13px; }
+.dlg textarea {
+  width: 100%; min-height: 160px; resize: vertical;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 10px;
+  font: 12px/1.45 var(--font-data);
+}
+.found { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 12px; }
+.found li { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px dashed var(--line); padding: 4px 0; font-size: 13px; }
+.found li b { font-family: var(--font-data); color: var(--s-fp); font-weight: 400; }
+.found li.miss b { color: var(--muted); }
+.chk { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.chk li::before { content: "✓ "; color: var(--s-calc); font-weight: 700; }
+.chk li.bad { color: var(--caution); }
+.chk li.bad::before { content: "! "; color: var(--caution); }
+.dlg-act { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.msg { font-size: 13px; color: var(--muted); }
+.msg.warn { color: var(--caution); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M8.2 21 10.6 4h2.8l2.4 17z" fill="none" stroke="var(--fg)" stroke-width="1.6" stroke-linejoin="round"/>
+        <path d="M12 7v2.2M12 11.5v2.4M12 16.3v2.7" stroke="var(--fg)" stroke-width="1.4" stroke-linecap="round"/>
+        <path d="M14.6 12.5c2.6-.9 4.8-2.9 6.4-6" fill="none" stroke="var(--s-in)" stroke-width="1.8" stroke-linecap="round"/>
+        <circle cx="21" cy="6.5" r="1.5" fill="var(--s-fp)"/>
+      </svg>
+      <span>TOLD</span>
+    </div>
+    <nav class="tabs" id="sectorTabs" aria-label="Sectors"></nav>
+    <button class="icon-btn" id="newSector" type="button" aria-label="New sector">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+    <button class="icon-btn" id="themeBtn" type="button" aria-label="Theme"></button>
+  </header>
+
+  <div class="sbar">
+    <div class="stitle"><h1 id="sTitle">New sector</h1><span id="sSub"></span></div>
+    <div class="sact">
+      <button class="btn" id="importBtn" type="button">Paste flight plan</button>
+      <button class="icon-btn" id="moreBtn" type="button" aria-label="Sector options">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4.5" cy="10" r="1.6" fill="currentColor"/><circle cx="10" cy="10" r="1.6" fill="currentColor"/><circle cx="15.5" cy="10" r="1.6" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="cardtabs" role="tablist" aria-label="Card">
+    <button type="button" role="tab" id="tabTo" aria-selected="true" aria-controls="cardTo">TAKE-OFF</button>
+    <button type="button" role="tab" id="tabLd" aria-selected="false" aria-controls="cardLd">LANDING</button>
+  </div>
+
+  <div class="cards">
+    <section class="card" id="cardTo" role="tabpanel" aria-labelledby="tabTo"></section>
+    <section class="card" id="cardLd" role="tabpanel" aria-labelledby="tabLd" hidden></section>
+  </div>
+
+  <div class="legend" aria-label="Colour key">
+    <span style="--c:var(--s-fp)"><i></i>From flight plan</span>
+    <span style="--c:var(--caution)"><i></i>Flight plan value changed</span>
+    <span style="--c:var(--s-in)"><i></i>Typed</span>
+    <span style="--c:var(--s-calc)"><i></i>Calculated</span>
+    <span style="--c:var(--s-calc)"><i class="ring"></i>Will calculate once data is added</span>
+  </div>
+  <p class="foot">Weights and fuel are in thousands of lb. Everything saves on this iPad as you type. Check every figure against your approved performance data. <span id="offlineState"></span></p>
+</div>
+
+<dialog id="importDlg" aria-labelledby="impTitle">
+  <form method="dialog" class="dlg" id="importForm">
+    <h2 id="impTitle">Paste flight plan</h2>
+    <p>In the flight plan app, select the text of page 1 (or more pages), copy it, and paste it here.</p>
+    <textarea id="impText" placeholder="Paste here" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+    <div class="dlg-act" style="justify-content:flex-start">
+      <button class="btn btn-ghost" type="button" id="impPaste">Paste from clipboard</button>
+      <span class="msg" id="impMsg" role="status"></span>
+    </div>
+    <ul class="found" id="impFound" hidden></ul>
+    <ul class="chk" id="impChecks" hidden></ul>
+    <div class="dlg-act">
+      <button class="btn btn-ghost" type="button" id="impCancel">Cancel</button>
+      <button class="btn btn-ghost" type="button" id="impNew" hidden>Fill a new sector</button>
+      <button class="btn" type="button" id="impFill" disabled>Fill card</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="moreDlg" aria-labelledby="moreTitle">
+  <div class="dlg">
+    <h2 id="moreTitle">Sector options</h2>
+    <p id="moreText">Clearing empties every box on both cards for this sector. Deleting removes the sector.</p>
+    <div class="dlg-act" style="justify-content:flex-start">
+      <button class="btn btn-ghost" type="button" id="clearBtn">Clear this sector</button>
+      <button class="btn btn-ghost" type="button" id="delBtn">Delete this sector</button>
+    </div>
+    <div class="dlg-act" id="confirmRow" hidden>
+      <span class="msg warn" id="confirmText"></span>
+      <button class="btn btn-warn" type="button" id="confirmBtn">Yes</button>
+    </div>
+    <div class="dlg-act"><button class="btn btn-ghost" type="button" id="moreClose">Close</button></div>
+  </div>
+</dialog>
+
+<script>
+/* TOLD flight plan reader: turns the text of NCA OFP page 1 (pasted, or read from a screenshot)
+   into card values. Tolerates common OCR slips (O/0, I/1, "/" read as "7", ZFW read as ZEW). */
+const OfpReader = (() => {
+  const OEW_MIN = 380000, OEW_MAX = 480000;
+
+  function clean(text) {
+    return String(text || '')
+      .toUpperCase()
+      .replace(/§/g, 'S')
+      .replace(/[–—]/g, '-')
+      .replace(/[|\[\]{}]/g, ' ')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\r/g, '');
+  }
+  const fixDigits = (s) => s.replace(/[O]/g, '0').replace(/[IL]/g, '1');
+  const num = (s) => (s == null ? null : Number(String(s).replace(/[^\d]/g, '')));
+
+  // A fuel-plan row: LABEL [airport] time fuel   e.g. "RSV 00/30 9800", "BOF KLAX 08/58 209000", "FOB 10/18 240000"
+  function fuelRow(t, label) {
+    const re = new RegExp('(?:^|\\s)' + label + '(?:\\s*([A-Z]{4}))?\\s*[:.]?\\s*(\\d{1,2}\\s?[\\/7]\\s?\\d{2}|\\d{4,5})\\s+(\\d{1,6})\\b', 'm');
+    const m = t.match(re);
+    return m ? { apt: m[1] || null, fuel: num(m[3]) } : null;
+  }
+
+  function parse(text) {
+    const t = clean(text);
+    const v = {};
+
+    let m = t.match(/\bNCA\s?(\d{2,4})\b/) || t.match(/\bKZ\s?(\d{2,4})\b/);
+    if (m) v.flt = String(Number(m[1]));
+
+    m = t.match(/\b([A-Z]{4})\s?\/\s?([A-Z]{3})\s*-\s*([A-Z]{4})\s?\/\s?([A-Z]{3})\b/);
+    if (m) { v.dep = m[2]; v.arr = m[4]; v.depIcao = m[1]; v.arrIcao = m[3]; }
+
+    m = t.match(/\bALTN\s*[:;]\s*([A-Z0-9]{4})\s*\/\s*([A-Z0-9]{4})/);
+    const altCodes = m ? [m[1], m[2]].map((c) => (c === 'N0NE' ? 'NONE' : c)) : [];
+
+    const tm = [...t.matchAll(/(?:^|[^A-Z])[S5]T([DA])\s*[:;.,]?\s*\S{3,6}?\/\s*([0-9OIL]{4})\s*Z/g)];
+    for (const x of tm) {
+      const key = x[1] === 'D' ? 'std' : 'sta';
+      if (!v[key]) v[key] = fixDigits(x[2]) + 'Z';
+    }
+
+    m = t.match(/\bF\/T\s*([0-9OIL]{1,2})\s*HR\s*([0-9OIL]{1,2})\s*M/);
+    if (m) v.ft = Number(fixDigits(m[1])) * 60 + Number(fixDigits(m[2]));
+
+    // Weight plan (planned column is the first 6-digit number after the label)
+    const w = (re) => { const r = t.match(re); return r ? num(r[1]) : null; };
+    v.zfw = w(/\bZ[FE]W\b[^\d\n]{0,8}(\d{6})\b/);
+    v.tow = w(/\bT[O0]W\b[^\d\n]{0,8}(\d{6})\b/);
+    v.ldw = w(/\bLDW\b[^\d\n]{0,8}(\d{6})\b/);
+    // Column-wise copy: "ZFW TOW LDW ... 662710 900685 691687"
+    m = t.match(/\bZ[FE]W\s+T[O0]W\s+LDW\b[^\d]{0,30}(\d{6})\s+(\d{6})\s+(\d{6})/);
+    if (m) { v.zfw = v.zfw || num(m[1]); v.tow = v.tow || num(m[2]); v.ldw = v.ldw || num(m[3]); }
+
+    // Fuel plan
+    const bof = fuelRow(t, 'BOF'); if (bof) v.trip = bof.fuel;
+    const rsv = fuelRow(t, 'RSV'); if (rsv) v.rsv = rsv.fuel;
+    const alt = fuelRow(t, 'ALT\\s?\\/'); if (alt) { v.altFuel = alt.fuel; v.altFuelApt = alt.apt; }
+    const tax = fuelRow(t, 'TAX'); if (tax) v.taxi = tax.fuel;
+    const fob = fuelRow(t, 'F[O0]B'); if (fob) v.fob = fob.fuel;
+    m = t.match(/\bF[O0]D\s*[=:\-]\s*(\d{3,6})\b/); if (m) v.fod = num(m[1]);
+
+    // Alternate summary rows: CODE FL DIST TIME FUEL
+    const summary = {};
+    for (const x of t.matchAll(/\b([A-Z]{4})\s+\d{2,3}\s+\d{2,4}\s+\d{2}\s?[\/7]\s?\d{2}\s+(\d{3,6})\b/g)) summary[x[1]] = num(x[2]);
+
+    const altn = (code, i) => {
+      if (!code || code === 'NONE') return { code: i === 0 && !code ? null : 'NONE', fuel: null };
+      let fuel = summary[code] != null ? summary[code] : null;
+      if (fuel == null && i === 0 && v.altFuel != null) fuel = v.altFuel;
+      return { code, fuel };
+    };
+    if (!altCodes.length && v.altFuelApt) altCodes.push(v.altFuelApt);
+    if (altCodes.length) { v.altn1 = altn(altCodes[0], 0); v.altn2 = altn(altCodes[1] || 'NONE', 1); }
+    if (v.rsv != null && v.altFuel != null) v.rsvAltn = v.rsv + v.altFuel;
+
+    // Payload: the number that, with the OEW beside it, adds up to the ZFW
+    if (v.zfw) {
+      const nums = [...t.matchAll(/\b(\d{4,6})\b/g)].map((x) => num(x[1]));
+      for (let i = 0; i < nums.length - 1; i++) {
+        const a = nums[i], b = nums[i + 1];
+        if (a + b === v.zfw) {
+          if (b >= OEW_MIN && b <= OEW_MAX) { v.pld = a; v.oew = b; break; }
+          if (a >= OEW_MIN && a <= OEW_MAX) { v.pld = b; v.oew = a; break; }
+        }
+      }
+    }
+    return v;
+  }
+
+  // Sanity checks between figures. Small differences come from the plan's rounding.
+  function checks(v) {
+    const out = [];
+    const near = (a, b, tol) => Math.abs(a - b) <= tol;
+    if (v.zfw && v.fob != null && v.taxi != null && v.tow) {
+      const exp = v.zfw + v.fob - v.taxi;
+      out.push({ id: 'tow', ok: near(v.tow, exp, 300), text: 'T/O weight = ZFW + FOB − taxi fuel', exp });
+    }
+    if (v.tow && v.trip != null && v.ldw) {
+      const exp = v.tow - v.trip;
+      out.push({ id: 'ldw', ok: near(v.ldw, exp, 300), text: 'LDW = T/O weight − trip fuel', exp });
+    }
+    if (v.fob != null && v.trip != null && v.taxi != null && v.fod != null) {
+      const exp = v.fob - v.trip - v.taxi;
+      out.push({ id: 'fod', ok: near(v.fod, exp, 200), text: 'FOD = FOB − trip − taxi fuel', exp });
+    }
+    if (v.zfw && v.pld != null && v.oew) out.push({ id: 'zfw', ok: v.pld + v.oew === v.zfw, text: 'ZFW = OEW + payload', exp: v.pld + v.oew });
+    return out;
+  }
+
+  return { parse, checks };
+})();
+if (typeof module !== 'undefined') module.exports = OfpReader;
+
+(() => {
+  'use strict';
+  const R = OfpReader;
+  const $ = (id) => document.getElementById(id);
+  const KEY = 'told:v1';
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  /* ---------- Boxes (from Kevin's field map) ---------- */
+  const F = {
+    flt: { label: 'KZ', type: 'text', ph: 'Flight' },
+    std: { label: 'STD', type: 'time' },
+    sta: { label: 'STA', type: 'time' },
+    thr: { label: 'THR', type: 'seg', opts: ['TO', 'TO1', 'TO2'] },
+    tflap: { label: 'FLAP', type: 'seg', opts: ['10', '20'] },
+    derate: { label: 'DERATE-T°', type: 'num', unit: '°C' },
+    nadp: { label: 'NADP', type: 'seg', opts: ['1', '2'] },
+    zfw: { label: 'ZFW', type: 'wt' },
+    spot: { label: 'SPOT', type: 'text' },
+    fob: { label: 'FOB', type: 'wt' },
+    altn1: { label: 'ALTN (1)', type: 'altn' },
+    tow: { label: 'T/O Weight', type: 'wt' },
+    altn2: { label: 'ALTN (2)', type: 'altn' },
+    fod: { label: 'FOD', type: 'wt' },
+    rsvAltn: { label: 'RSV + ALTN', type: 'wt' },
+    ldw: { label: 'LDW', type: 'wt' },
+    fup: { label: "TOW F UP SPD (10 000')", type: 'num', unit: 'kt' },
+    atis: { label: 'ATIS', type: 'text' },
+    g13: { label: '1.3G ALT', type: 'text' },
+    pitch: { label: 'T/O Pitch', type: 'num', unit: '°', pending: true },
+    gradAll: { label: 'Climb grad all eng', type: 'num', unit: '%', pending: true },
+    trim: { label: 'Stab trim', type: 'num' },
+    gradOei: { label: 'Climb grad one eng inop', type: 'num', unit: '%', pending: true },
+    v1: { label: 'V1', type: 'num' },
+    vr: { label: 'VR', type: 'num' },
+    v2: { label: 'V2', type: 'num' },
+    n1: { label: 'TO N1', type: 'num', unit: '%' },
+    pld: { label: 'Payload', type: 'wt' },
+    sg: { label: 'Fuel SG', type: 'num' },
+    dd: { label: 'ONE EI Driftdown', type: 'text' },
+    oeiSpd: { label: 'ONE EI Speed', type: 'num', unit: 'kt' },
+    lflap: { label: 'FLAP', type: 'seg', opts: ['25', '30'] },
+    lspot: { label: 'SPOT', type: 'text' },
+    vadd: { label: 'VREF ADD', type: 'num', unit: 'kt' },
+    lfod: { label: 'FOD', type: 'wt' },
+    latis: { label: 'ATIS', type: 'text' },
+    fapch: { label: 'Final apch bfr dvt', type: 'text' },
+    vref25: { label: 'VREF 25', type: 'num' },
+    vref30: { label: 'VREF 30', type: 'num' },
+    vapp: { label: 'VAPP', type: 'num', calc: true },
+    gaAll: { label: 'GA all engines', type: 'num', unit: '%', pending: true },
+    gaOei: { label: 'GA one EI', type: 'num', unit: '%', pending: true }
+  };
+  const TO_ROWS = [
+    { hdr: true, cells: ['flt', 'std', 'sta'] },
+    ['thr', 'tflap'], ['derate', 'nadp'], ['zfw', 'spot'], ['fob', 'altn1'], ['tow', 'altn2'],
+    ['fod', 'rsvAltn'], ['ldw', 'fup'], ['atis', 'g13'], ['pitch', 'gradAll'], ['trim', 'gradOei'],
+    { compact: true, cells: ['v1', 'vr', 'v2', 'n1'] },
+    ['pld', 'sg'], ['dd', 'oeiSpd'], 'checks'
+  ];
+  const LD_ROWS = [
+    { hdr: true, cells: ['flt', 'std', 'sta'] },
+    ['lflap', 'lspot'], ['vadd', 'altn1'], ['lfod', 'altn2'], ['ldw', 'rsvAltn'], ['latis', 'fapch'],
+    { compact: true, cells: ['vref25', 'vref30', 'vapp'] },
+    ['gaAll', 'gaOei']
+  ];
+  const CHECKS = ['Preflight', 'Catering', 'Clearance', 'W&B', 'Fuel loading', 'Temp control', 'BRFG'];
+
+  // Value keys: a box's id, except ALTN boxes which hold <id>C (airport) and <id>F (fuel)
+  const keyType = (k) => {
+    if (/^altn[12]C$/.test(k)) return 'code';
+    if (/^altn[12]F$/.test(k)) return 'wt';
+    return F[k] ? F[k].type : 'text';
+  };
+
+  /* ---------- State ---------- */
+  const newSector = () => ({ id: 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), created: Date.now(), v: {}, src: {}, fpv: {}, checks: {}, info: {} });
+  let store = load();
+  function load() {
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem(KEY)); } catch (e) { s = null; }
+    if (!s || !Array.isArray(s.sectors) || !s.sectors.length) {
+      const first = newSector();
+      s = { sectors: [first], current: first.id, card: 'to', theme: (s && s.theme) || 'auto' };
+    }
+    if (!s.sectors.find((x) => x.id === s.current)) s.current = s.sectors[0].id;
+    return s;
+  }
+  let saveT = 0;
+  function save(now) {
+    clearTimeout(saveT);
+    const go = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* storage full or blocked */ } };
+    if (now) go(); else saveT = setTimeout(go, 250);
+  }
+  const cur = () => store.sectors.find((x) => x.id === store.current);
+
+  /* ---------- Formatting ---------- */
+  const fmtWt = (lb) => (lb == null || lb === '' || !isFinite(lb) ? '' : (lb / 1000).toFixed(1));
+  function parseWt(s) {
+    s = String(s).replace(/[,\s]/g, '');
+    if (!s) return null;
+    const n = Number(s);
+    if (!isFinite(n)) return NaN;
+    return n < 5000 ? Math.round(n * 1000) : Math.round(n); // 662.7 means 662,700 lb; 662710 means lb
+  }
+  function normTime(s) {
+    const d = String(s).replace(/[^\d]/g, '');
+    if (d.length < 3) return String(s).toUpperCase();
+    const p = d.padStart(4, '0').slice(0, 4);
+    return p + 'Z';
+  }
+  function displayOf(s, k) {
+    const t = keyType(k);
+    const v = s.v[k];
+    if (v == null) return '';
+    return t === 'wt' ? fmtWt(v) : String(v);
+  }
+  function srcOf(s, k) {
+    if (s.v[k] == null || s.v[k] === '') return '';
+    if (s.fpv[k] != null) return String(s.fpv[k]) === String(s.v[k]) ? 'fp' : 'edit';
+    return 'user';
+  }
+  function computeVapp(s) {
+    const vref = s.v.lflap === '25' ? s.v.vref25 : s.v.lflap === '30' ? s.v.vref30 : null;
+    const a = parseFloat(vref), b = parseFloat(s.v.vadd);
+    return isFinite(a) && isFinite(b) ? Math.round(a + b) : null;
+  }
+
+  /* ---------- Build cards ---------- */
+  function inputHTML(k, card, extra) {
+    const t = keyType(k);
+    const mode = t === 'wt' || t === 'num' ? 'decimal' : t === 'time' ? 'numeric' : 'text';
+    const ph = extra && extra.ph ? extra.ph : '';
+    return `<input id="${card}-${k}" data-k="${k}" inputmode="${mode}" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false" enterkeyhint="next" placeholder="${esc(ph)}">`;
+  }
+  function pairHTML(id, card) {
+    const f = F[id];
+    const dot = f.calc || f.pending ? '<i class="src calc" aria-hidden="true"></i>' : '';
+    let val;
+    if (f.type === 'seg') {
+      val = `<div class="val"><div class="seg" role="group" aria-label="${esc(f.label)}">${f.opts.map((o) => `<button type="button" data-k="${id}" data-opt="${esc(o)}" aria-pressed="false">${esc(o)}</button>`).join('')}</div></div>`;
+    } else if (f.type === 'altn') {
+      val = `<div class="val split" data-cell="${id}">${inputHTML(id + 'C', card, { ph: 'Apt' })}${inputHTML(id + 'F', card, { ph: 'Fuel' })}</div>`;
+    } else {
+      const ph = f.calc ? 'Auto' : f.pending ? 'Type' : f.ph || '';
+      val = `<div class="val" data-cell="${id}">${inputHTML(id, card, { ph })}${f.unit ? `<span class="unit">${esc(f.unit)}</span>` : ''}</div>`;
+    }
+    return `<div class="pair"><label class="lab" for="${card}-${f.type === 'altn' ? id + 'C' : id}">${dot}${esc(f.label)}</label>${val}</div>`;
+  }
+  function cardHTML(rows, card, title) {
+    let h = `<div class="card-cap"><span>${title}</span><span id="${card}-cap"></span></div>`;
+    rows.forEach((r) => {
+      if (r === 'checks') {
+        h += `<div class="row" style="--n:1"><div class="checks" role="group" aria-label="Preparation checks">${CHECKS.map((c) => `<button type="button" class="ck" data-ck="${esc(c)}" aria-pressed="false">${esc(c)}</button>`).join('')}</div></div>`;
+        return;
+      }
+      const cells = Array.isArray(r) ? r : r.cells;
+      const cls = ['row', r.hdr ? 'hdr' : '', r.compact ? 'compact' : ''].join(' ');
+      h += `<div class="${cls}" style="--n:${cells.length}">${cells.map((id) => pairHTML(id, card)).join('')}</div>`;
+    });
+    return h;
+  }
+  $('cardTo').innerHTML = cardHTML(TO_ROWS, 'to', 'Take-off');
+  $('cardLd').innerHTML = cardHTML(LD_ROWS, 'ld', 'Landing');
+
+  /* ---------- Paint ---------- */
+  function paint() {
+    const s = cur();
+    document.querySelectorAll('input[data-k]').forEach((inp) => {
+      const k = inp.dataset.k;
+      const cell = inp.closest('.val');
+      if (k === 'vapp') {
+        const over = s.v.vapp != null && s.v.vapp !== '';
+        const calc = computeVapp(s);
+        if (document.activeElement !== inp) inp.value = over ? s.v.vapp : calc == null ? '' : String(calc);
+        cell.dataset.src = over ? 'user' : calc == null ? '' : 'calc';
+        return;
+      }
+      if (document.activeElement !== inp) inp.value = displayOf(s, k);
+      if (!cell.classList.contains('split')) cell.dataset.src = srcOf(s, k);
+      else {
+        const a = srcOf(s, cell.dataset.cell + 'C'), b = srcOf(s, cell.dataset.cell + 'F');
+        cell.dataset.src = a === 'edit' || b === 'edit' ? 'edit' : a || b;
+      }
+    });
+    document.querySelectorAll('.seg button').forEach((b) => b.setAttribute('aria-pressed', String(s.v[b.dataset.k] === b.dataset.opt)));
+    document.querySelectorAll('.ck').forEach((b) => b.setAttribute('aria-pressed', String(!!s.checks[b.dataset.ck])));
+    paintHeader();
+  }
+  function sectorLabel(s) { return s.v.flt ? 'KZ' + s.v.flt : 'New'; }
+  function paintHeader() {
+    const s = cur();
+    const route = s.info.dep && s.info.arr ? `${s.info.dep}–${s.info.arr}` : '';
+    $('sTitle').textContent = s.v.flt ? `KZ${s.v.flt}${route ? ' ' + route : ''}` : 'New sector';
+    const bits = [];
+    if (s.v.std) bits.push('STD ' + s.v.std);
+    if (s.info.ft) bits.push('F/T ' + Math.floor(s.info.ft / 60) + ':' + String(s.info.ft % 60).padStart(2, '0'));
+    $('sSub').textContent = bits.join(' · ');
+    const done = CHECKS.filter((c) => s.checks[c]).length;
+    $('to-cap').textContent = `${done}/${CHECKS.length} checks`;
+    $('ld-cap').textContent = route;
+    $('sectorTabs').innerHTML = store.sectors.map((x) => `<button type="button" class="stab" data-sid="${x.id}" aria-current="${x.id === store.current}">${esc(sectorLabel(x))}${x.info.arr ? ' ' + esc(x.info.arr) : ''}</button>`).join('');
+  }
+
+  /* ---------- Editing ---------- */
+  function setValue(k, raw) {
+    const s = cur();
+    const t = keyType(k);
+    let v = raw;
+    if (t === 'wt') v = parseWt(raw);
+    else if (typeof v === 'string') v = v.trim().toUpperCase();
+    if (v == null || v === '' || (typeof v === 'number' && isNaN(v))) delete s.v[k];
+    else s.v[k] = v;
+    save();
+  }
+  document.addEventListener('input', (e) => {
+    const inp = e.target.closest('input[data-k]');
+    if (!inp) return;
+    const k = inp.dataset.k;
+    if (keyType(k) === 'wt' && isNaN(parseWt(inp.value))) { inp.closest('.val').dataset.src = 'edit'; return; }
+    setValue(k, inp.value);
+    paint();
+  });
+  document.addEventListener('focusout', (e) => {
+    const inp = e.target.closest && e.target.closest('input[data-k]');
+    if (!inp) return;
+    const k = inp.dataset.k;
+    if (keyType(k) === 'time' && inp.value) { setValue(k, normTime(inp.value)); }
+    if (document.activeElement === inp) setTimeout(paint, 0); else paint();
+  });
+  document.addEventListener('keydown', (e) => {
+    const inp = e.target.closest && e.target.closest('input[data-k]');
+    if (!inp || e.key !== 'Enter') return;
+    e.preventDefault();
+    const card = inp.closest('.card');
+    const all = [...card.querySelectorAll('input[data-k]')];
+    const next = all[all.indexOf(inp) + 1];
+    if (next) next.focus(); else inp.blur();
+  });
+  document.addEventListener('click', (e) => {
+    const seg = e.target.closest('.seg button');
+    if (seg) {
+      const s = cur();
+      if (s.v[seg.dataset.k] === seg.dataset.opt) delete s.v[seg.dataset.k]; else s.v[seg.dataset.k] = seg.dataset.opt;
+      save(); paint();
+      return;
+    }
+    const ck = e.target.closest('.ck');
+    if (ck) {
+      const s = cur();
+      s.checks[ck.dataset.ck] = !s.checks[ck.dataset.ck];
+      save(); paint();
+      return;
+    }
+    const tab = e.target.closest('.stab');
+    if (tab) { store.current = tab.dataset.sid; save(true); paint(); }
+  });
+
+  /* Card tabs */
+  function showCard(c) {
+    store.card = c;
+    $('cardTo').hidden = c !== 'to';
+    $('cardLd').hidden = c !== 'ld';
+    $('tabTo').setAttribute('aria-selected', String(c === 'to'));
+    $('tabLd').setAttribute('aria-selected', String(c === 'ld'));
+    save();
+  }
+  $('tabTo').addEventListener('click', () => showCard('to'));
+  $('tabLd').addEventListener('click', () => showCard('ld'));
+
+  /* Sectors */
+  $('newSector').addEventListener('click', () => {
+    const s = newSector();
+    store.sectors.push(s);
+    store.current = s.id;
+    save(true); paint(); showCard('to');
+  });
+
+  /* ---------- Import ---------- */
+  const FOUND = [
+    ['Flight', (v) => (v.flt ? 'KZ' + v.flt : null)],
+    ['Route', (v) => (v.dep ? v.dep + '–' + v.arr : null)],
+    ['STD', (v) => v.std], ['STA', (v) => v.sta],
+    ['ZFW', (v) => fmtWt(v.zfw)], ['T/O weight', (v) => fmtWt(v.tow)], ['LDW', (v) => fmtWt(v.ldw)],
+    ['FOB', (v) => fmtWt(v.fob)], ['FOD', (v) => fmtWt(v.fod)], ['RSV + ALTN', (v) => fmtWt(v.rsvAltn)],
+    ['ALTN 1', (v) => (v.altn1 && v.altn1.code ? v.altn1.code + (v.altn1.fuel != null ? ' ' + fmtWt(v.altn1.fuel) : '') : null)],
+    ['ALTN 2', (v) => (v.altn2 && v.altn2.code ? v.altn2.code + (v.altn2.fuel != null ? ' ' + fmtWt(v.altn2.fuel) : '') : null)],
+    ['Payload', (v) => fmtWt(v.pld)]
+  ];
+  let parsed = null;
+  function readImport() {
+    const text = $('impText').value;
+    if (!text.trim()) { parsed = null; $('impFound').hidden = true; $('impChecks').hidden = true; $('impFill').disabled = true; $('impNew').hidden = true; $('impMsg').textContent = ''; return; }
+    parsed = R.parse(text);
+    const rows = FOUND.map(([label, fn]) => { const x = fn(parsed); return `<li class="${x ? '' : 'miss'}"><span>${label}</span><b>${x ? esc(x) : 'not found'}</b></li>`; });
+    $('impFound').innerHTML = rows.join('');
+    $('impFound').hidden = false;
+    const ch = R.checks(parsed);
+    $('impChecks').innerHTML = ch.map((c) => `<li class="${c.ok ? '' : 'bad'}">${esc(c.text)}${c.ok ? '' : ` (expected about ${fmtWt(c.exp)})`}</li>`).join('');
+    $('impChecks').hidden = !ch.length;
+    const count = FOUND.filter(([, fn]) => fn(parsed)).length;
+    $('impFill').disabled = count === 0;
+    $('impMsg').textContent = count ? `Found ${count} of ${FOUND.length}.` : 'Nothing recognised yet. Paste page 1 of the plan.';
+    $('impMsg').className = 'msg' + (count ? '' : ' warn');
+    const s = cur();
+    const other = s.v.flt && parsed.flt && s.v.flt !== parsed.flt;
+    $('impNew').hidden = !other;
+    $('impFill').textContent = other ? `Replace KZ${s.v.flt}` : 'Fill card';
+  }
+  function applyImport(s, v) {
+    const put = (k, val) => { if (val == null) return; s.v[k] = val; s.fpv[k] = val; };
+    put('flt', v.flt); put('std', v.std); put('sta', v.sta);
+    put('zfw', v.zfw); put('tow', v.tow); put('ldw', v.ldw); put('fob', v.fob);
+    put('fod', v.fod); put('lfod', v.fod); put('rsvAltn', v.rsvAltn); put('pld', v.pld);
+    if (v.altn1) { put('altn1C', v.altn1.code); put('altn1F', v.altn1.fuel); }
+    if (v.altn2) { put('altn2C', v.altn2.code); put('altn2F', v.altn2.fuel); }
+    s.info = { dep: v.dep || s.info.dep, arr: v.arr || s.info.arr, ft: v.ft != null ? v.ft : s.info.ft };
+  }
+  let lastFocus = null;
+  $('importBtn').addEventListener('click', () => {
+    lastFocus = document.activeElement;
+    $('impText').value = '';
+    readImport();
+    $('importDlg').showModal();
+    $('impText').focus();
+  });
+  let impT = 0;
+  $('impText').addEventListener('input', () => { clearTimeout(impT); impT = setTimeout(readImport, 200); });
+  $('impPaste').addEventListener('click', async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      $('impText').value = t;
+      readImport();
+    } catch (e) {
+      $('impMsg').textContent = 'Tap and hold in the box above, then choose Paste.';
+      $('impMsg').className = 'msg warn';
+      $('impText').focus();
+    }
+  });
+  const closeImport = () => { $('importDlg').close(); if (lastFocus && lastFocus.focus) lastFocus.focus(); };
+  $('impCancel').addEventListener('click', closeImport);
+  $('impFill').addEventListener('click', () => {
+    if (!parsed) return;
+    applyImport(cur(), parsed);
+    save(true); paint(); closeImport();
+  });
+  $('impNew').addEventListener('click', () => {
+    if (!parsed) return;
+    const s = newSector();
+    store.sectors.push(s); store.current = s.id;
+    applyImport(s, parsed);
+    save(true); paint(); showCard('to'); closeImport();
+  });
+
+  /* ---------- Sector options ---------- */
+  let pending = null;
+  $('moreBtn').addEventListener('click', () => {
+    pending = null; $('confirmRow').hidden = true;
+    $('moreTitle').textContent = `Sector options: ${sectorLabel(cur())}`;
+    $('moreDlg').showModal();
+  });
+  $('clearBtn').addEventListener('click', () => { pending = 'clear'; $('confirmText').textContent = 'Clear every box on both cards?'; $('confirmRow').hidden = false; });
+  $('delBtn').addEventListener('click', () => { pending = 'delete'; $('confirmText').textContent = 'Delete this sector for good?'; $('confirmRow').hidden = false; });
+  $('confirmBtn').addEventListener('click', () => {
+    const s = cur();
+    if (pending === 'clear') { s.v = {}; s.src = {}; s.fpv = {}; s.checks = {}; s.info = {}; }
+    if (pending === 'delete') {
+      store.sectors = store.sectors.filter((x) => x.id !== s.id);
+      if (!store.sectors.length) store.sectors.push(newSector());
+      store.current = store.sectors[store.sectors.length - 1].id;
+    }
+    save(true); paint(); $('moreDlg').close();
+  });
+  $('moreClose').addEventListener('click', () => $('moreDlg').close());
+
+  /* ---------- Theme ---------- */
+  const THEME_ICONS = {
+    auto: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 3.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"/></svg>',
+    dark: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.6A6.5 6.5 0 0 1 7.4 4.5a6.5 6.5 0 1 0 8.1 8.1z" fill="currentColor"/></svg>',
+    light: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" fill="currentColor"/><g stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 1.8v2.2M10 16v2.2M1.8 10H4M16 10h2.2M4.2 4.2l1.6 1.6M14.2 14.2l1.6 1.6M4.2 15.8l1.6-1.6M14.2 5.8l1.6-1.6"/></g></svg>'
+  };
+  const THEME_NAMES = { auto: 'automatic', dark: 'night', light: 'day' };
+  function applyTheme(initial) {
+    const root = document.documentElement;
+    if (store.theme === 'dark' || store.theme === 'light') root.setAttribute('data-theme', store.theme);
+    else if (!initial) root.removeAttribute('data-theme');
+    $('themeBtn').innerHTML = THEME_ICONS[store.theme] || THEME_ICONS.auto;
+    $('themeBtn').setAttribute('aria-label', `Theme: ${THEME_NAMES[store.theme] || 'automatic'}. Tap to change.`);
+  }
+  $('themeBtn').addEventListener('click', () => {
+    store.theme = store.theme === 'auto' ? 'dark' : store.theme === 'dark' ? 'light' : 'auto';
+    save(true); applyTheme(false);
+  });
+
+  /* ---------- Offline ---------- */
+  const isApp = !!document.querySelector('link[rel="manifest"]');
+  const standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+  if (isApp && 'serviceWorker' in navigator) {
+    $('offlineState').textContent = 'Saving for offline use…';
+    navigator.serviceWorker.register('sw.js')
+      .then(() => navigator.serviceWorker.ready)
+      .then(() => { $('offlineState').textContent = standalone ? 'Ready offline.' : 'Ready offline. To install: Share, then Add to Home Screen.'; })
+      .catch(() => { $('offlineState').textContent = 'Offline mode is not available in this browser.'; });
+  }
+
+  /* ---------- Start ---------- */
+  applyTheme(true);
+  showCard(store.card === 'ld' ? 'ld' : 'to');
+  paint();
+  window.addEventListener('pagehide', () => save(true));
+  document.addEventListener('visibilitychange', () => { if (document.hidden) save(true); });
+})();
+</script>
+</body>
+</html>
