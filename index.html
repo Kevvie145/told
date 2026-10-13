@@ -343,13 +343,15 @@ const OfpReader = (() => {
     if (m) v.ft = Number(fixDigits(m[1])) * 60 + Number(fixDigits(m[2]));
 
     // Weight plan (planned column is the first 6-digit number after the label)
+    // Column-wise copy first: "ZFW TOW LDW ... 662710 900685 691687"
+    m = t.match(/Z[FE]W\s+T[O0]W\s+LDW(?![A-Z])[^\d]{0,40}(\d{6})\s+(\d{6})\s+(\d{6})(?!\d)/);
+    if (m) { v.zfw = num(m[1]); v.tow = num(m[2]); v.ldw = num(m[3]); }
+    // Row-wise: label then the planned figure. The label may be glued to the number before it
+    // ("10600TOW") and the figure may sit on the next line.
     const w = (re) => { const r = t.match(re); return r ? num(r[1]) : null; };
-    v.zfw = w(/\bZ[FE]W\b[^\d\n]{0,8}(\d{6})\b/);
-    v.tow = w(/\bT[O0]W\b[^\d\n]{0,8}(\d{6})\b/);
-    v.ldw = w(/\bLDW\b[^\d\n]{0,8}(\d{6})\b/);
-    // Column-wise copy: "ZFW TOW LDW ... 662710 900685 691687"
-    m = t.match(/\bZ[FE]W\s+T[O0]W\s+LDW\b[^\d]{0,30}(\d{6})\s+(\d{6})\s+(\d{6})/);
-    if (m) { v.zfw = v.zfw || num(m[1]); v.tow = v.tow || num(m[2]); v.ldw = v.ldw || num(m[3]); }
+    if (v.zfw == null) v.zfw = w(/(?:^|[^A-Z])Z[FE]W(?![A-Z])[^\d]{0,12}?(\d{6})(?!\d)/);
+    if (v.tow == null) v.tow = w(/(?:^|[^A-Z])T[O0]W(?![A-Z])[^\d]{0,12}?(\d{6})(?!\d)/);
+    if (v.ldw == null) v.ldw = w(/(?:^|[^A-Z])LDW(?![A-Z])[^\d]{0,12}?(\d{6})(?!\d)/);
 
     // Fuel plan
     const bof = fuelRow(t, 'BOF'); if (bof) v.trip = bof.fuel;
@@ -358,6 +360,17 @@ const OfpReader = (() => {
     const tax = fuelRow(t, 'TAX'); if (tax) v.taxi = tax.fuel;
     const fob = fuelRow(t, 'F[O0]B'); if (fob) v.fob = fob.fuel;
     m = t.match(/\bF[O0]D\s*[=:\-]\s*(\d{3,6})\b/); if (m) v.fod = num(m[1]);
+
+    // Fuel specific gravity (usually on a later page): "FUEL SG 0.798", "S.G .80", "SPECIFIC GRAVITY 0.795", "DENSITY 0.80"
+    for (const re of [/(?:^|[^A-Z])(?:FUEL\s*)?S\.?\s?G\.?(?![A-Z])[^\d\n]{0,10}((?:0|1)?\.\d{2,4})(?!\d)/,
+                      /SPECIFIC\s+GRAVITY[^\d\n]{0,10}((?:0|1)?\.\d{2,4})(?!\d)/,
+                      /DENSITY[^\d\n]{0,12}((?:0|1)?\.\d{2,4})(?!\d)/]) {
+      m = t.match(re);
+      if (m) {
+        const sg = Number(m[1].startsWith('.') ? '0' + m[1] : m[1]);
+        if (sg >= 0.7 && sg <= 0.86) { v.sg = sg; break; }
+      }
+    }
 
     // Alternate summary rows: CODE FL DIST TIME FUEL
     const summary = {};
@@ -533,12 +546,323 @@ const PitchTables = (() => {
 })();
 if (typeof module !== 'undefined') module.exports = PitchTables;
 
+/* 747-8F all-engine climb gradients (%), read from the NCA AOR charts every 10,000 lb.
+   Take-off: "4 Engine Climb Gradient" TO/TO1/TO2 flaps 10 and TO flaps 20 (OI.1.3 to OI.1.6, Oct 6 2021).
+   Go-around: Flaps 20 (OI.1.7, Apr 13 2023). Values traced from photos of the charts and checked against
+   each chart's gridlines and worked example; expect about ±0.05 %. Charts are valid at ISA+15 °C and below;
+   above that, subtract the per-degree correction (take-off: OAT or assumed temp, to ISA+39; go-around: to ISA+35). */
+const Gradients = (() => {
+  const CLIMB = {
+    'TO/10': {
+      page: 'OI.1.3', w0: 730, step: 10,
+      to: { pa: [0, 1000, 2000, 3000, 4000], perDeg: [-0.31, -0.31, -0.3, -0.29, -0.28], v: [
+        [19.35, 18.90, 18.46, 18.04, 17.63, 17.24, 16.86, 16.50, 16.13, 15.78, 15.44, 15.10, 14.77, 14.45, 14.15, 13.85, 13.56, 13.28, 13.00, 12.73, 12.47, 12.22, 11.97, 11.73, 11.50, 11.29, 11.08],
+        [18.59, 18.15, 17.71, 17.31, 16.92, 16.54, 16.17, 15.81, 15.46, 15.11, 14.78, 14.45, 14.14, 13.83, 13.53, 13.25, 12.97, 12.69, 12.43, 12.17, 11.92, 11.67, 11.43, 11.20, 10.98, 10.77, 10.57],
+        [17.81, 17.38, 16.97, 16.57, 16.19, 15.82, 15.46, 15.11, 14.76, 14.43, 14.11, 13.80, 13.50, 13.20, 12.92, 12.64, 12.37, 12.12, 11.86, 11.61, 11.36, 11.13, 10.90, 10.67, 10.45, 10.25, 10.06],
+        [17.04, 16.62, 16.21, 15.83, 15.46, 15.10, 14.74, 14.41, 14.09, 13.77, 13.46, 13.16, 12.88, 12.59, 12.32, 12.05, 11.80, 11.54, 11.29, 11.05, 10.82, 10.59, 10.36, 10.13, 9.92, 9.73, 9.54],
+        [16.28, 15.88, 15.48, 15.11, 14.75, 14.41, 14.09, 13.77, 13.46, 13.15, 12.85, 12.56, 12.28, 12.01, 11.74, 11.48, 11.23, 10.99, 10.75, 10.52, 10.28, 10.06, 9.84, 9.62, 9.42, 9.22, 9.04]
+      ] },
+      clb: { pa: [2000, 3000, 4000], perDeg: [-0.22, -0.21, -0.2], w0: 730, v: [
+        [12.58, 12.25, 11.93, 11.62, 11.33, 11.04, 10.77, 10.50, 10.24, 9.98, 9.73, 9.48, 9.25, 9.03, 8.81, 8.59, 8.37, 8.17, 7.97, 7.77, 7.58, 7.39, 7.20, 7.01, 6.84, 6.68, 6.53],
+        [12.05, 11.74, 11.42, 11.13, 10.85, 10.58, 10.31, 10.04, 9.79, 9.55, 9.31, 9.08, 8.85, 8.63, 8.42, 8.21, 8.00, 7.80, 7.60, 7.40, 7.21, 7.03, 6.85, 6.67, 6.50, 6.34, 6.18],
+        [11.54, 11.23, 10.93, 10.64, 10.37, 10.10, 9.85, 9.61, 9.36, 9.12, 8.89, 8.67, 8.45, 8.23, 8.02, 7.81, 7.61, 7.41, 7.22, 7.03, 6.85, 6.67, 6.49, 6.32, 6.15, 6.01, 5.87]
+      ] }
+    },
+    'TO1/10': {
+      page: 'OI.1.5', w0: 730, step: 10,
+      to: { pa: [0, 1000, 2000, 3000, 4000], perDeg: [-0.27, -0.26, -0.24, -0.21, -0.2], v: [
+        [15.49, 15.11, 14.73, 14.37, 14.01, 13.67, 13.33, 13.01, 12.69, 12.38, 12.07, 11.78, 11.50, 11.22, 10.95, 10.69, 10.43, 10.18, 9.94, 9.70, 9.48, 9.26, 9.04, 8.82, 8.61, 8.42, 8.24],
+        [14.87, 14.49, 14.12, 13.76, 13.42, 13.08, 12.76, 12.44, 12.13, 11.83, 11.53, 11.25, 10.97, 10.71, 10.44, 10.18, 9.94, 9.70, 9.46, 9.23, 9.01, 8.79, 8.58, 8.38, 8.18, 7.99, 7.82],
+        [14.33, 13.95, 13.58, 13.24, 12.90, 12.57, 12.26, 11.95, 11.64, 11.35, 11.06, 10.78, 10.51, 10.25, 9.99, 9.75, 9.50, 9.27, 9.04, 8.82, 8.61, 8.40, 8.19, 7.99, 7.79, 7.61, 7.44],
+        [13.75, 13.39, 13.03, 12.69, 12.36, 12.04, 11.73, 11.43, 11.13, 10.85, 10.57, 10.30, 10.03, 9.78, 9.53, 9.29, 9.06, 8.83, 8.61, 8.39, 8.18, 7.97, 7.77, 7.58, 7.39, 7.21, 7.04],
+        [13.10, 12.75, 12.41, 12.08, 11.76, 11.45, 11.15, 10.85, 10.57, 10.29, 10.03, 9.76, 9.51, 9.26, 9.02, 8.79, 8.56, 8.34, 8.13, 7.92, 7.71, 7.51, 7.32, 7.13, 6.94, 6.77, 6.61]
+      ] },
+      clb: { pa: [2000, 3000, 4000], perDeg: [-0.2, -0.19, -0.19], w0: 730, v: [
+        [10.45, 10.16, 9.87, 9.60, 9.33, 9.07, 8.83, 8.58, 8.34, 8.11, 7.88, 7.67, 7.46, 7.26, 7.06, 6.87, 6.68, 6.50, 6.32, 6.15, 5.98, 5.82, 5.65, 5.49, 5.33, 5.19, 5.05],
+        [9.98, 9.70, 9.42, 9.15, 8.89, 8.64, 8.40, 8.16, 7.93, 7.71, 7.50, 7.29, 7.09, 6.89, 6.70, 6.51, 6.33, 6.15, 5.98, 5.81, 5.64, 5.48, 5.32, 5.16, 5.02, 4.89, 4.76],
+        [9.53, 9.26, 8.99, 8.73, 8.48, 8.23, 8.00, 7.77, 7.56, 7.34, 7.13, 6.93, 6.73, 6.54, 6.35, 6.17, 5.99, 5.82, 5.65, 5.49, 5.32, 5.16, 5.02, 4.88, 4.73, 4.59, 4.45]
+      ] }
+    },
+    'TO2/10': {
+      page: 'OI.1.6', w0: 730, step: 10,
+      to: { pa: [0, 1000, 2000, 3000, 4000], perDeg: [-0.24, -0.22, -0.2, -0.18, -0.16], v: [
+        [12.48, 12.14, 11.81, 11.48, 11.16, 10.86, 10.57, 10.28, 10.01, 9.74, 9.47, 9.21, 8.96, 8.72, 8.48, 8.25, 8.03, 7.82, 7.61, 7.41, 7.21, 7.01, 6.82, 6.64, 6.46, 6.30, 6.14],
+        [11.85, 11.52, 11.19, 10.88, 10.57, 10.28, 10.00, 9.72, 9.45, 9.18, 8.92, 8.68, 8.44, 8.20, 7.98, 7.76, 7.55, 7.34, 7.14, 6.94, 6.75, 6.56, 6.37, 6.19, 6.02, 5.87, 5.72],
+        [11.31, 10.99, 10.67, 10.36, 10.06, 9.77, 9.50, 9.23, 8.97, 8.71, 8.46, 8.22, 7.98, 7.76, 7.54, 7.33, 7.13, 6.93, 6.73, 6.53, 6.35, 6.16, 5.99, 5.81, 5.64, 5.49, 5.34],
+        [10.77, 10.46, 10.15, 9.85, 9.56, 9.29, 9.02, 8.75, 8.50, 8.25, 8.01, 7.78, 7.55, 7.33, 7.12, 6.91, 6.71, 6.52, 6.33, 6.14, 5.96, 5.78, 5.60, 5.43, 5.27, 5.12, 4.98],
+        [10.17, 9.87, 9.57, 9.28, 8.99, 8.73, 8.47, 8.21, 7.97, 7.73, 7.50, 7.27, 7.05, 6.84, 6.64, 6.44, 6.25, 6.05, 5.87, 5.69, 5.51, 5.35, 5.18, 5.01, 4.86, 4.72, 4.58]
+      ] },
+      clb: { pa: [2000, 3000, 4000], perDeg: [-0.17, -0.17, -0.16], w0: 730, v: [
+        [8.35, 8.09, 7.83, 7.59, 7.36, 7.13, 6.90, 6.68, 6.47, 6.27, 6.07, 5.88, 5.69, 5.52, 5.35, 5.18, 5.01, 4.85, 4.70, 4.54, 4.39, 4.24, 4.09, 3.95, 3.81, 3.68, 3.56],
+        [7.93, 7.68, 7.43, 7.19, 6.96, 6.74, 6.53, 6.32, 6.11, 5.92, 5.73, 5.54, 5.37, 5.19, 5.02, 4.86, 4.70, 4.54, 4.39, 4.24, 4.09, 3.95, 3.80, 3.67, 3.53, 3.41, 3.29],
+        [7.52, 7.28, 7.04, 6.80, 6.58, 6.37, 6.17, 5.97, 5.77, 5.58, 5.40, 5.22, 5.04, 4.88, 4.71, 4.55, 4.40, 4.25, 4.10, 3.95, 3.81, 3.67, 3.53, 3.39, 3.26, 3.14, 3.02]
+      ] }
+    },
+    'TO/20': {
+      page: 'OI.1.4', w0: 730, step: 10,
+      to: { pa: [0, 1000, 2000, 3000, 4000], perDeg: [-0.35, -0.33, -0.31, -0.29, -0.27], v: [
+        [17.99, 17.54, 17.10, 16.68, 16.28, 15.89, 15.51, 15.14, 14.79, 14.44, 14.10, 13.77, 13.44, 13.12, 12.82, 12.51, 12.22, 11.93, 11.66, 11.39, 11.13, 10.87, 10.62, 10.38, 10.15, 9.95, 9.76],
+        [17.25, 16.81, 16.38, 15.97, 15.57, 15.19, 14.83, 14.47, 14.12, 13.78, 13.44, 13.12, 12.80, 12.49, 12.20, 11.91, 11.62, 11.34, 11.07, 10.82, 10.56, 10.31, 10.07, 9.82, 9.60, 9.40, 9.23],
+        [16.48, 16.05, 15.63, 15.23, 14.85, 14.48, 14.11, 13.76, 13.43, 13.09, 12.77, 12.46, 12.16, 11.85, 11.57, 11.28, 11.01, 10.74, 10.48, 10.22, 9.98, 9.73, 9.50, 9.27, 9.05, 8.86, 8.69],
+        [15.70, 15.28, 14.88, 14.49, 14.11, 13.75, 13.41, 13.07, 12.74, 12.42, 12.11, 11.80, 11.51, 11.22, 10.94, 10.66, 10.39, 10.13, 9.88, 9.64, 9.40, 9.17, 8.94, 8.71, 8.51, 8.33, 8.17],
+        [14.94, 14.53, 14.14, 13.76, 13.40, 13.05, 12.71, 12.38, 12.06, 11.75, 11.45, 11.16, 10.87, 10.58, 10.31, 10.04, 9.79, 9.53, 9.29, 9.06, 8.83, 8.61, 8.39, 8.18, 7.98, 7.80, 7.65]
+      ] },
+      clb: { pa: [2000, 3000, 4000], perDeg: [-0.22, -0.21, -0.21], w0: 730, v: [
+        [11.07, 10.74, 10.42, 10.11, 9.81, 9.53, 9.25, 8.98, 8.73, 8.48, 8.23, 7.99, 7.75, 7.52, 7.30, 7.08, 6.86, 6.66, 6.45, 6.26, 6.06, 5.87, 5.68, 5.50, 5.32, 5.18, 5.05],
+        [10.54, 10.23, 9.91, 9.61, 9.32, 9.05, 8.79, 8.53, 8.28, 8.03, 7.79, 7.56, 7.32, 7.10, 6.88, 6.67, 6.46, 6.26, 6.06, 5.86, 5.68, 5.50, 5.32, 5.13, 4.97, 4.83, 4.70],
+        [10.03, 9.72, 9.42, 9.13, 8.85, 8.57, 8.31, 8.06, 7.82, 7.58, 7.34, 7.11, 6.90, 6.68, 6.46, 6.25, 6.05, 5.86, 5.66, 5.48, 5.29, 5.12, 4.95, 4.77, 4.61, 4.48, 4.36]
+      ] }
+    }
+  };
+  // One engine inoperative (3 engines, V2): "1 Engine Inoperative Climb Gradient" OI.1.8 to OI.1.11, Oct 17 2023.
+  const CLIMB_OEI = {
+    'TO/10': {
+      page: 'OI.1.8', w0: 730, step: 10,
+      to: { pa: [0, 1000, 2000, 3000, 4000], perDeg: [-0.22, -0.21, -0.21, -0.2, -0.19], v: [
+        [10.94, 10.64, 10.34, 10.06, 9.78, 9.52, 9.27, 9.02, 8.77, 8.53, 8.30, 8.07, 7.85, 7.63, 7.42, 7.21, 7.01, 6.82, 6.63, 6.44, 6.26, 6.08, 5.91, 5.73, 5.57, 5.42, 5.27],
+        [10.44, 10.15, 9.86, 9.58, 9.31, 9.06, 8.81, 8.56, 8.32, 8.08, 7.86, 7.63, 7.42, 7.21, 7.00, 6.81, 6.61, 6.41, 6.23, 6.05, 5.87, 5.70, 5.53, 5.36, 5.19, 5.05, 4.91],
+        [9.92, 9.63, 9.35, 9.09, 8.83, 8.58, 8.34, 8.09, 7.86, 7.63, 7.40, 7.19, 6.98, 6.78, 6.58, 6.38, 6.19, 6.01, 5.83, 5.65, 5.48, 5.31, 5.14, 4.98, 4.83, 4.69, 4.55],
+        [9.40, 9.12, 8.85, 8.59, 8.34, 8.09, 7.85, 7.62, 7.39, 7.17, 6.96, 6.75, 6.54, 6.34, 6.15, 5.96, 5.78, 5.60, 5.42, 5.25, 5.08, 4.93, 4.77, 4.61, 4.46, 4.32, 4.19],
+        [8.90, 8.63, 8.36, 8.11, 7.86, 7.62, 7.39, 7.16, 6.93, 6.72, 6.51, 6.31, 6.11, 5.92, 5.73, 5.55, 5.37, 5.20, 5.03, 4.87, 4.71, 4.56, 4.40, 4.25, 4.11, 3.97, 3.84]
+      ] }
+    },
+    'TO1/10': {
+      page: 'OI.1.10', w0: 730, step: 10,
+      to: { pa: [0, 1000, 2000, 3000, 4000], perDeg: [-0.19, -0.18, -0.17, -0.15, -0.14], v: [
+        [8.35, 8.09, 7.83, 7.58, 7.34, 7.10, 6.87, 6.65, 6.43, 6.22, 6.01, 5.81, 5.61, 5.42, 5.23, 5.04, 4.86, 4.69, 4.52, 4.35, 4.19, 4.03, 3.88, 3.72, 3.58, 3.45, 3.32],
+        [7.94, 7.68, 7.42, 7.18, 6.94, 6.71, 6.48, 6.26, 6.04, 5.84, 5.64, 5.44, 5.25, 5.06, 4.87, 4.69, 4.52, 4.35, 4.18, 4.02, 3.86, 3.71, 3.56, 3.41, 3.27, 3.14, 3.02],
+        [7.56, 7.31, 7.07, 6.82, 6.59, 6.36, 6.14, 5.92, 5.71, 5.51, 5.31, 5.12, 4.93, 4.75, 4.56, 4.39, 4.22, 4.05, 3.89, 3.74, 3.58, 3.43, 3.28, 3.14, 3.00, 2.88, 2.76],
+        [7.16, 6.91, 6.67, 6.43, 6.20, 5.98, 5.77, 5.56, 5.35, 5.15, 4.96, 4.77, 4.59, 4.41, 4.23, 4.06, 3.90, 3.74, 3.59, 3.44, 3.28, 3.13, 2.99, 2.85, 2.72, 2.60, 2.48],
+        [6.70, 6.47, 6.23, 6.00, 5.78, 5.57, 5.36, 5.16, 4.96, 4.77, 4.58, 4.40, 4.22, 4.05, 3.88, 3.72, 3.56, 3.40, 3.25, 3.10, 2.95, 2.81, 2.68, 2.54, 2.41, 2.30, 2.18]
+      ] }
+    },
+    'TO2/10': {
+      page: 'OI.1.11', w0: 730, step: 10,
+      to: { pa: [0, 1000, 2000, 3000, 4000], perDeg: [-0.17, -0.16, -0.15, -0.13, -0.12], v: [
+        [6.27, 6.03, 5.80, 5.58, 5.36, 5.15, 4.95, 4.75, 4.56, 4.37, 4.19, 4.01, 3.83, 3.66, 3.50, 3.33, 3.18, 3.02, 2.88, 2.73, 2.59, 2.45, 2.31, 2.19, 2.06, 1.95, 1.84],
+        [5.83, 5.61, 5.39, 5.17, 4.96, 4.76, 4.56, 4.36, 4.17, 3.98, 3.81, 3.64, 3.47, 3.30, 3.14, 2.98, 2.83, 2.68, 2.54, 2.40, 2.26, 2.13, 2.00, 1.88, 1.76, 1.65, 1.55],
+        [5.46, 5.24, 5.01, 4.80, 4.60, 4.40, 4.20, 4.01, 3.83, 3.65, 3.47, 3.30, 3.14, 2.98, 2.82, 2.67, 2.52, 2.38, 2.24, 2.11, 1.98, 1.86, 1.73, 1.61, 1.49, 1.40, 1.31],
+        [5.09, 4.87, 4.65, 4.44, 4.24, 4.05, 3.87, 3.68, 3.51, 3.33, 3.16, 2.99, 2.83, 2.68, 2.53, 2.38, 2.24, 2.10, 1.97, 1.84, 1.72, 1.60, 1.48, 1.36, 1.25, 1.16, 1.07],
+        [4.66, 4.45, 4.24, 4.04, 3.84, 3.65, 3.47, 3.30, 3.12, 2.95, 2.79, 2.63, 2.48, 2.33, 2.18, 2.04, 1.91, 1.78, 1.65, 1.53, 1.41, 1.30, 1.19, 1.08, 0.97, 0.88, 0.79]
+      ] }
+    },
+    'TO/20': {
+      page: 'OI.1.9', w0: 730, step: 10,
+      to: { pa: [0, 1000, 2000, 3000, 4000], perDeg: [-0.23, -0.22, -0.22, -0.21, -0.2], v: [
+        [9.98, 9.66, 9.35, 9.05, 8.77, 8.49, 8.22, 7.96, 7.71, 7.47, 7.23, 7.00, 6.78, 6.56, 6.33, 6.12, 5.91, 5.71, 5.52, 5.32, 5.14, 4.96, 4.78, 4.60, 4.44, 4.30, 4.18],
+        [9.46, 9.15, 8.84, 8.56, 8.28, 8.01, 7.75, 7.50, 7.26, 7.02, 6.79, 6.56, 6.34, 6.11, 5.90, 5.69, 5.49, 5.29, 5.10, 4.92, 4.74, 4.56, 4.39, 4.21, 4.05, 3.91, 3.79],
+        [8.92, 8.62, 8.32, 8.04, 7.77, 7.51, 7.26, 7.01, 6.77, 6.54, 6.32, 6.09, 5.88, 5.67, 5.46, 5.26, 5.06, 4.87, 4.68, 4.50, 4.33, 4.15, 3.99, 3.82, 3.67, 3.53, 3.41],
+        [8.38, 8.09, 7.80, 7.53, 7.26, 7.01, 6.76, 6.52, 6.29, 6.06, 5.84, 5.62, 5.41, 5.21, 5.01, 4.81, 4.62, 4.44, 4.26, 4.09, 3.91, 3.74, 3.57, 3.41, 3.26, 3.14, 3.02],
+        [7.84, 7.56, 7.28, 7.01, 6.75, 6.50, 6.26, 6.03, 5.81, 5.59, 5.38, 5.17, 4.96, 4.76, 4.57, 4.38, 4.20, 4.02, 3.84, 3.67, 3.50, 3.34, 3.18, 3.02, 2.88, 2.75, 2.64]
+      ] }
+    }
+  };
+  const GA = {
+    page: 'OI.1.7', w0: 600, step: 10, pa: [3000, 4000, 5000], perDeg: [-0.34, -0.31, -0.29], v: [
+        [19.75, 19.18, 18.61, 18.06, 17.53, 17.04, 16.55, 16.08, 15.63, 15.19, 14.76, 14.35, 13.95, 13.57, 13.21, 12.89, 12.59, 12.28, 11.97, 11.66],
+        [19.50, 18.93, 18.36, 17.82, 17.30, 16.81, 16.32, 15.86, 15.41, 14.97, 14.55, 14.14, 13.75, 13.36, 13.00, 12.69, 12.40, 12.08, 11.76, 11.45],
+        [19.18, 18.62, 18.05, 17.51, 17.00, 16.50, 16.02, 15.56, 15.11, 14.68, 14.26, 13.86, 13.47, 13.09, 12.73, 12.42, 12.13, 11.82, 11.51, 11.19]
+    ]
+  };
+
+  const lerp = (xs, ys, x) => {
+    if (x <= xs[0]) return ys[0];
+    for (let i = 0; i < xs.length - 1; i++) if (x <= xs[i + 1]) return ys[i] + (ys[i + 1] - ys[i]) * (x - xs[i]) / (xs[i + 1] - xs[i]);
+    return ys[ys.length - 1];
+  };
+  const isa = (pa) => 15 - 1.98 * pa / 1000;
+  const r2 = (x) => Math.round(x * 100) / 100;
+
+  // value on one curve at weight w (1000 lb)
+  function onCurve(row, w0, step, w) {
+    const ws = row.map((_, i) => w0 + i * step);
+    return lerp(ws, row, w);
+  }
+  function weightRange(w0, step, row) { return [w0, w0 + step * (row.length - 1)]; }
+
+  /* All-engine take-off climb gradient.
+     o: thr, flap, tow (lb), at, oat (°C), palt (ft) */
+  function climbWith(SET, o) {
+    if (!o.thr || !o.flap) return { error: 'Select THR and FLAP' };
+    const key = `${o.thr}/${o.flap}`;
+    const c = SET[key];
+    if (!c) return { error: `No climb chart for ${o.thr} flap ${o.flap}` };
+    if (!(o.tow > 0)) return { error: 'Enter T/O weight' };
+    const hasAt = o.at != null && isFinite(o.at), hasOat = o.oat != null && isFinite(o.oat);
+    if (!hasAt && !hasOat) return { error: 'Enter OAT or assumed temp' };
+    const w = o.tow / 1000;
+    const [wa, wb] = weightRange(c.w0, c.step, c.to.v[0]);
+    if (w < wa - 1e-9 || w > wb + 1e-9) return { error: `Weight outside chart (${wa}–${wb})` };
+    const paltMissing = !(o.palt != null && isFinite(o.palt));
+    const pa = paltMissing ? 0 : Math.max(0, o.palt);
+    if (pa > 4000) return { error: 'P.ALT above 4000 ft is outside the chart' };
+    const temp = hasAt ? o.at : o.oat;
+    if (temp > isa(pa) + 39) return { error: 'Temperature above ISA+39 is outside the chart' };
+    const perCurve = c.to.v.map((row) => onCurve(row, c.w0, c.step, w));
+    const base = lerp(c.to.pa, perCurve, pa);
+    const over = Math.max(0, temp - (isa(pa) + 15));
+    const corr = over * lerp(c.to.pa, c.to.perDeg, pa);
+    return { value: r2(base + corr), base: r2(base), corr: r2(corr), key, page: c.page, pa, temp, usedAt: hasAt, paltMissing };
+  }
+
+  /* All-engine go-around gradient, flaps 20. o: ldw (lb), oat (°C), palt (ft) */
+  function goAround(o) {
+    if (!(o.ldw > 0)) return { error: 'Enter LDW' };
+    if (!(o.oat != null && isFinite(o.oat))) return { error: 'Enter destination OAT' };
+    const w = o.ldw / 1000;
+    const [wa, wb] = weightRange(GA.w0, GA.step, GA.v[0]);
+    if (w < wa - 1e-9 || w > wb + 1e-9) return { error: `Weight outside chart (${wa}–${wb})` };
+    const paltMissing = !(o.palt != null && isFinite(o.palt));
+    const pa = paltMissing ? 0 : o.palt;
+    if (pa > 5000) return { error: 'P.ALT above 5000 ft is outside the chart' };
+    const paC = Math.max(3000, pa); // "3000 & below" curve
+    if (o.oat > isa(pa) + 35) return { error: 'Temperature above ISA+35 is outside the chart' };
+    const perCurve = GA.v.map((row) => onCurve(row, GA.w0, GA.step, w));
+    const base = lerp(GA.pa, perCurve, paC);
+    const over = Math.max(0, o.oat - (isa(pa) + 15));
+    const corr = over * lerp(GA.pa, GA.perDeg, paC);
+    return { value: r2(base + corr), base: r2(base), corr: r2(corr), page: GA.page, pa, temp: o.oat, paltMissing };
+  }
+  const climb = (o) => climbWith(CLIMB, o);
+  const climbOei = (o) => climbWith(CLIMB_OEI, o);
+  return { climb, climbOei, goAround, CLIMB, CLIMB_OEI, GA, isa };
+})();
+if (typeof module !== 'undefined') module.exports = Gradients;
+
+/* 747-8F engine-inoperative go-around climb gradient, flaps 20, gear up (%).
+   Source: NCA AOR Engine Inop Advisory Information, Go-Around Climb Gradient, tables 1-3.
+   Based on engine bleeds for packs on and anti-ice off. */
+const GaOei = (() => {
+  // Table 1: reference gradient. Rows: airport OAT 54 down to 0 °C. Columns: pressure altitude.
+  const PA = [0, 2000, 4000, 6000, 8000, 10000];
+  const OAT = [54, 52, 50, 48, 46, 44, 42, 40, 38, 36, 34, 32, 30, 28, 26, 24, 22, 20, 18, 16, 14, 12, 10, 8, 6, 4, 2, 0];
+  const REF = [
+    [4.37, 4.03, 3.58, 2.84, 2.04, null],
+    [4.76, 4.32, 3.86, 3.13, 2.33, null],
+    [5.15, 4.63, 4.16, 3.42, 2.63, 1.36],
+    [5.55, 5.01, 4.47, 3.71, 2.92, 1.64],
+    [5.95, 5.40, 4.79, 4.02, 3.21, 1.92],
+    [6.36, 5.79, 5.16, 4.33, 3.50, 2.19],
+    [6.76, 6.19, 5.53, 4.66, 3.81, 2.47],
+    [7.17, 6.59, 5.91, 5.04, 4.13, 2.74],
+    [7.61, 7.00, 6.29, 5.42, 4.45, 3.03],
+    [8.03, 7.40, 6.67, 5.77, 4.76, 3.33],
+    [8.38, 7.79, 7.05, 6.09, 5.08, 3.61],
+    [8.67, 8.11, 7.40, 6.41, 5.38, 3.86],
+    [8.97, 8.41, 7.70, 6.73, 5.66, 4.12],
+    [8.98, 8.71, 7.97, 7.08, 5.93, 4.37],
+    [8.99, 8.99, 8.25, 7.49, 6.21, 4.61],
+    [9.00, 9.00, 8.54, 7.72, 6.52, 4.85],
+    [9.01, 9.01, 8.82, 7.95, 6.92, 5.08],
+    [9.02, 9.02, 8.82, 8.18, 7.16, 5.31],
+    [9.03, 9.02, 8.83, 8.39, 7.36, 5.55],
+    [9.04, 9.03, 8.83, 8.39, 7.54, 5.76],
+    [9.05, 9.04, 8.84, 8.39, 7.71, 5.96],
+    [9.06, 9.05, 8.84, 8.39, 7.71, 6.13],
+    [9.06, 9.05, 8.85, 8.40, 7.71, 6.30],
+    [9.07, 9.06, 8.85, 8.40, 7.71, 6.30],
+    [9.07, 9.06, 8.86, 8.40, 7.71, 6.30],
+    [9.08, 9.07, 8.86, 8.40, 7.71, 6.31],
+    [9.09, 9.07, 8.87, 8.40, 7.71, 6.31],
+    [9.09, 9.07, 8.87, 8.41, 7.71, 6.31]
+  ];
+  // Table 2: weight adjustment. Rows: weight 800 down to 500 (1000 lb). Columns: reference gradient 2-10 %.
+  const WT = [800, 780, 760, 740, 720, 700, 680, 660, 640, 620, 600, 580, 560, 540, 520, 500];
+  const RG = [2, 3, 4, 5, 6, 7, 8, 9, 10];
+  const WADJ = [
+    [-1.91, -2.07, -2.24, -2.41, -2.57, -2.72, -2.87, -3.02, -3.19],
+    [-1.68, -1.82, -1.96, -2.11, -2.24, -2.38, -2.51, -2.63, -2.74],
+    [-1.42, -1.53, -1.65, -1.76, -1.88, -1.99, -2.10, -2.19, -2.27],
+    [-1.12, -1.21, -1.30, -1.39, -1.48, -1.56, -1.65, -1.72, -1.78],
+    [-0.79, -0.85, -0.91, -0.97, -1.03, -1.09, -1.15, -1.20, -1.24],
+    [-0.41, -0.45, -0.48, -0.51, -0.54, -0.57, -0.60, -0.63, -0.66],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0.39, 0.42, 0.46, 0.49, 0.52, 0.55, 0.59, 0.62, 0.64],
+    [0.81, 0.88, 0.94, 1.01, 1.08, 1.15, 1.22, 1.28, 1.33],
+    [1.26, 1.37, 1.47, 1.56, 1.67, 1.78, 1.90, 1.99, 2.06],
+    [1.74, 1.89, 2.03, 2.16, 2.31, 2.47, 2.62, 2.75, 2.85],
+    [2.27, 2.46, 2.63, 2.80, 3.00, 3.20, 3.40, 3.57, 3.69],
+    [2.83, 3.06, 3.28, 3.50, 3.74, 4.00, 4.24, 4.45, 4.60],
+    [3.43, 3.72, 3.98, 4.25, 4.55, 4.86, 5.15, 5.40, 5.58],
+    [4.09, 4.43, 4.74, 5.06, 5.42, 5.79, 6.14, 6.43, 6.63],
+    [4.79, 5.19, 5.56, 5.94, 6.36, 6.80, 7.21, 7.55, 7.77]
+  ];
+  // Table 3: speed adjustment. Rows: VREF30 + 0..30 kt. Columns: weight-adjusted gradient 1-17 %.
+  const SPD = [0, 5, 10, 15, 20, 25, 30];
+  const WG = [1, 3, 5, 7, 9, 11, 13, 15, 17];
+  const SADJ = [
+    [-0.14, -0.14, -0.15, -0.15, -0.15, -0.16, -0.16, -0.16, -0.14],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0.04, 0.02, 0.01, 0.00, -0.02, -0.03, -0.03, -0.02, 0.00],
+    [0.03, 0.00, -0.03, -0.06, -0.09, -0.11, -0.11, -0.10, -0.07],
+    [-0.03, -0.07, -0.12, -0.18, -0.22, -0.25, -0.26, -0.24, -0.19],
+    [-0.12, -0.18, -0.27, -0.36, -0.42, -0.46, -0.47, -0.46, -0.39],
+    [-0.21, -0.32, -0.47, -0.59, -0.67, -0.73, -0.75, -0.74, -0.68]
+  ];
+
+  // Position of x in an axis (ascending or descending): [i, fraction]. Clamped to the ends.
+  function locate(axis, x) {
+    const asc = axis[axis.length - 1] > axis[0];
+    const n = axis.length;
+    for (let i = 0; i < n - 1; i++) {
+      const a = axis[i], b = axis[i + 1];
+      const inside = asc ? x >= a && x <= b : x <= a && x >= b;
+      if (inside) return [i, (x - a) / (b - a)];
+    }
+    const atStart = asc ? x < axis[0] : x > axis[0];
+    return atStart ? [0, 0] : [n - 2, 1];
+  }
+  function bilinear(tab, rows, cols, r, c) {
+    const [i, fr] = locate(rows, r), [j, fc] = locate(cols, c);
+    const q = [tab[i][j], tab[i][j + 1], tab[i + 1][j], tab[i + 1][j + 1]];
+    const need = [(1 - fr) * (1 - fc), (1 - fr) * fc, fr * (1 - fc), fr * fc];
+    let v = 0;
+    for (let k = 0; k < 4; k++) {
+      if (need[k] > 1e-9 && q[k] == null) return null;
+      if (q[k] != null) v += q[k] * need[k];
+    }
+    return v;
+  }
+  const r2 = (x) => Math.round(x * 100) / 100;
+
+  /* o: ldw (lb), oat (°C), palt (ft), speedInc (kt above VREF30, or null for VREF30+5),
+        packsOff, antiIce, icing (booleans) */
+  function calc(o) {
+    if (!(o.ldw > 0)) return { error: 'Enter LDW' };
+    if (!(o.oat != null && isFinite(o.oat))) return { error: 'Enter destination OAT' };
+    if (o.oat > 54) return { error: 'OAT above 54 °C is outside the table' };
+    const w = o.ldw / 1000;
+    if (w < 500 || w > 800) return { error: 'Weight outside table (500–800)' };
+    const paltMissing = !(o.palt != null && isFinite(o.palt));
+    const pa = paltMissing ? 0 : Math.max(0, o.palt);
+    if (pa > 10000) return { error: 'P.ALT above 10 000 ft is outside the table' };
+    const ref = bilinear(REF, OAT, PA, Math.max(0, o.oat), pa);
+    if (ref == null) return { error: 'Outside the table at this OAT and P.ALT' };
+    const wadj = bilinear(WADJ, WT, RG, w, ref);
+    const wag = ref + wadj;
+    const speedAssumed = !(o.speedInc != null && isFinite(o.speedInc));
+    const inc = speedAssumed ? 5 : Math.min(30, Math.max(0, o.speedInc));
+    const sadj = bilinear(SADJ, SPD, WG, inc, wag);
+    let corr = 0;
+    const corrs = [];
+    if (o.packsOff) { corr += 0.2; corrs.push('A/C off +0.2'); }
+    if (o.antiIce) { corr -= 0.2; corrs.push('eng A/I −0.2'); }
+    if (o.icing) { corr -= 1.0; corrs.push('icing −1.0'); }
+    return {
+      value: r2(wag + sadj + corr), ref: r2(ref), wadj: r2(wadj), sadj: r2(sadj), inc: Math.round(inc),
+      corrs, pa, temp: o.oat, paltMissing, speedAssumed
+    };
+  }
+  return { calc };
+})();
+if (typeof module !== 'undefined') module.exports = GaOei;
+
 (() => {
   'use strict';
   const R = OfpReader;
   const $ = (id) => document.getElementById(id);
   const KEY = 'told:v1';
-  const VERSION = 'App v3 · pitch tables Rev.17–20';
+  const VERSION = 'App v6 · pitch tables Rev.17–20 · climb charts OI.1.3–1.11 · OEI go-around tables';
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   /* ---------- Boxes (from Kevin's field map) ---------- */
@@ -566,9 +890,9 @@ if (typeof module !== 'undefined') module.exports = PitchTables;
     palt: { label: 'P.ALT', type: 'num', unit: 'ft' },
     packs: { label: 'A/C', type: 'seg', opts: ['ON', 'OFF'] },
     pitch: { label: 'T/O Pitch', type: 'num', unit: '°', calc: true },
-    gradAll: { label: 'Climb grad all eng', type: 'num', unit: '%', pending: true },
+    gradAll: { label: 'Climb grad all eng', type: 'num', unit: '%', calc: true },
     trim: { label: 'Stab trim', type: 'num' },
-    gradOei: { label: 'Climb grad one eng inop', type: 'num', unit: '%', pending: true },
+    gradOei: { label: 'Climb grad one eng inop', type: 'num', unit: '%', calc: true },
     v1: { label: 'V1', type: 'num' },
     vr: { label: 'VR', type: 'num' },
     v2: { label: 'V2', type: 'num' },
@@ -586,8 +910,13 @@ if (typeof module !== 'undefined') module.exports = PitchTables;
     vref25: { label: 'VREF 25', type: 'num' },
     vref30: { label: 'VREF 30', type: 'num' },
     vapp: { label: 'VAPP', type: 'num', calc: true },
-    gaAll: { label: 'GA all engines', type: 'num', unit: '%', pending: true },
-    gaOei: { label: 'GA one EI', type: 'num', unit: '%', pending: true }
+    gaAll: { label: 'GA all engines', type: 'num', unit: '%', calc: true },
+    loat: { label: 'OAT', type: 'num', unit: '°C' },
+    lpalt: { label: 'P.ALT', type: 'num', unit: 'ft' },
+    gaOei: { label: 'GA one EI', type: 'num', unit: '%', calc: true },
+    lpacks: { label: 'A/C', type: 'seg', opts: ['ON', 'OFF'] },
+    lai: { label: 'Eng A/I', type: 'seg', opts: ['OFF', 'ON'] },
+    icing: { label: 'Icing', type: 'seg', opts: ['NO', 'YES'] }
   };
   const TO_ROWS = [
     { hdr: true, cells: ['flt', 'std', 'sta'] },
@@ -599,7 +928,8 @@ if (typeof module !== 'undefined') module.exports = PitchTables;
   ];
   const LD_ROWS = [
     { hdr: true, cells: ['flt', 'std', 'sta'] },
-    ['lflap', 'lspot'], ['vadd', 'altn1'], ['lfod', 'altn2'], ['ldw', 'rsvAltn'], ['latis', 'fapch'],
+    ['lflap', 'lspot'], ['vadd', 'altn1'], ['lfod', 'altn2'], ['ldw', 'rsvAltn'], ['latis', 'fapch'], ['loat', 'lpalt'],
+    { compact: true, cells: ['lpacks', 'lai', 'icing'] },
     { compact: true, cells: ['vref25', 'vref30', 'vapp'] },
     ['gaAll', 'gaOei']
   ];
@@ -674,6 +1004,54 @@ if (typeof module !== 'undefined') module.exports = PitchTables;
     if (r.paltMissing) return { text: bits.join(' · ') + ' · P.ALT not set, sea level used', warn: true };
     return { text: bits.join(' · '), warn: false };
   }
+  function gradNote(r, what) {
+    if (r.error) return { text: r.error, warn: true };
+    const bits = [];
+    if (what) bits.push(what);
+    bits.push(`PA ${Math.round(r.pa)} · ${r.usedAt ? 'AT' : 'OAT'} ${r.temp} · chart ${r.base.toFixed(2)}`);
+    if (r.corr) bits.push(`temp ${r.corr.toFixed(2)}`);
+    if (r.paltMissing) return { text: bits.join(' · ') + ' · P.ALT not set, sea level used', warn: true };
+    return { text: bits.join(' · '), warn: false };
+  }
+  const CALC = {
+    vapp: (s) => {
+      const v = computeVapp(s);
+      return { calc: v == null ? null : String(v), note: { text: v == null ? 'Needs flap, VREF and VREF ADD' : 'VREF ' + s.v.lflap + ' + ADD', warn: false } };
+    },
+    pitch: (s) => {
+      const r = computePitch(s);
+      return { calc: r.value == null ? null : r.value.toFixed(1), note: pitchNote(r) };
+    },
+    gradAll: (s) => {
+      const r = Gradients.climb({ thr: s.v.thr, flap: s.v.tflap, tow: s.v.tow, at: numOrNull(s.v.derate), oat: numOrNull(s.v.oat), palt: numOrNull(s.v.palt) });
+      return { calc: r.value == null ? null : r.value.toFixed(1), note: gradNote(r, r.key ? r.key.replace('/', ' F') : '') };
+    },
+    gradOei: (s) => {
+      const r = Gradients.climbOei({ thr: s.v.thr, flap: s.v.tflap, tow: s.v.tow, at: numOrNull(s.v.derate), oat: numOrNull(s.v.oat), palt: numOrNull(s.v.palt) });
+      return { calc: r.value == null ? null : r.value.toFixed(1), note: gradNote(r, r.key ? 'OEI ' + r.key.replace('/', ' F') : '') };
+    },
+    gaOei: (s) => {
+      const vapp = numOrNull(s.v.vapp != null && s.v.vapp !== '' ? s.v.vapp : computeVapp(s));
+      const vref30 = numOrNull(s.v.vref30);
+      const r = GaOei.calc({
+        ldw: s.v.ldw, oat: numOrNull(s.v.loat), palt: numOrNull(s.v.lpalt),
+        speedInc: vapp != null && vref30 != null ? vapp - vref30 : null,
+        packsOff: s.v.lpacks === 'OFF', antiIce: s.v.lai === 'ON', icing: s.v.icing === 'YES'
+      });
+      let note;
+      if (r.error) note = { text: r.error, warn: true };
+      else {
+        const bits = [`OEI F20 · PA ${Math.round(r.pa)} · OAT ${r.temp} · ref ${r.ref.toFixed(2)} · wt ${r.wadj >= 0 ? '+' : ''}${r.wadj.toFixed(2)}`,
+          `${r.speedAssumed ? 'VREF30+5 assumed' : 'VAPP = VREF30+' + r.inc} ${r.sadj >= 0 ? '+' : ''}${r.sadj.toFixed(2)}`].concat(r.corrs);
+        note = { text: bits.join(' · ') + (r.paltMissing ? ' · P.ALT not set, sea level used' : ''), warn: r.paltMissing };
+      }
+      return { calc: r.value == null ? null : r.value.toFixed(1), note };
+    },
+    gaAll: (s) => {
+      const r = Gradients.goAround({ ldw: s.v.ldw, oat: numOrNull(s.v.loat), palt: numOrNull(s.v.lpalt) });
+      return { calc: r.value == null ? null : r.value.toFixed(1), note: gradNote(r, 'GA F20') };
+    }
+  };
   function computeVapp(s) {
     const vref = s.v.lflap === '25' ? s.v.vref25 : s.v.lflap === '30' ? s.v.vref30 : null;
     const a = parseFloat(vref), b = parseFloat(s.v.vadd);
@@ -724,11 +1102,9 @@ if (typeof module !== 'undefined') module.exports = PitchTables;
     document.querySelectorAll('input[data-k]').forEach((inp) => {
       const k = inp.dataset.k;
       const cell = inp.closest('.val');
-      if (k === 'vapp' || k === 'pitch') {
+      if (CALC[k]) {
         const over = s.v[k] != null && s.v[k] !== '';
-        let calc, note;
-        if (k === 'vapp') { calc = computeVapp(s); calc = calc == null ? null : String(calc); note = { text: calc == null ? 'Needs flap, VREF and VREF ADD' : 'VREF ' + s.v.lflap + ' + ADD', warn: false }; }
-        else { const r = computePitch(s); calc = r.value == null ? null : r.value.toFixed(1); note = pitchNote(r); }
+        const { calc, note } = CALC[k](s);
         if (document.activeElement !== inp) inp.value = over ? s.v[k] : calc == null ? '' : calc;
         cell.dataset.src = over ? 'user' : calc == null ? '' : 'calc';
         const n = cell.querySelector('.note');
@@ -847,22 +1223,25 @@ if (typeof module !== 'undefined') module.exports = PitchTables;
     ['FOB', (v) => fmtWt(v.fob)], ['FOD', (v) => fmtWt(v.fod)], ['RSV + ALTN', (v) => fmtWt(v.rsvAltn)],
     ['ALTN 1', (v) => (v.altn1 && v.altn1.code ? v.altn1.code + (v.altn1.fuel != null ? ' ' + fmtWt(v.altn1.fuel) : '') : null)],
     ['ALTN 2', (v) => (v.altn2 && v.altn2.code ? v.altn2.code + (v.altn2.fuel != null ? ' ' + fmtWt(v.altn2.fuel) : '') : null)],
-    ['Payload', (v) => fmtWt(v.pld)]
+    ['Payload', (v) => fmtWt(v.pld)],
+    ['Fuel SG', (v) => (v.sg != null ? String(v.sg) : null), true]
   ];
   let parsed = null;
   function readImport() {
     const text = $('impText').value;
     if (!text.trim()) { parsed = null; $('impFound').hidden = true; $('impChecks').hidden = true; $('impFill').disabled = true; $('impNew').hidden = true; $('impMsg').textContent = ''; return; }
     parsed = R.parse(text);
-    const rows = FOUND.map(([label, fn]) => { const x = fn(parsed); return `<li class="${x ? '' : 'miss'}"><span>${label}</span><b>${x ? esc(x) : 'not found'}</b></li>`; });
+    const rows = FOUND.map(([label, fn, optional]) => { const x = fn(parsed); return `<li class="${x ? '' : 'miss'}"><span>${label}</span><b>${x ? esc(x) : optional ? 'not in this text' : 'not found'}</b></li>`; });
     $('impFound').innerHTML = rows.join('');
     $('impFound').hidden = false;
     const ch = R.checks(parsed);
     $('impChecks').innerHTML = ch.map((c) => `<li class="${c.ok ? '' : 'bad'}">${esc(c.text)}${c.ok ? '' : ` (expected about ${fmtWt(c.exp)})`}</li>`).join('');
     $('impChecks').hidden = !ch.length;
+    const req = FOUND.filter((f) => !f[2]);
     const count = FOUND.filter(([, fn]) => fn(parsed)).length;
+    const reqCount = req.filter(([, fn]) => fn(parsed)).length;
     $('impFill').disabled = count === 0;
-    $('impMsg').textContent = count ? `Found ${count} of ${FOUND.length}.` : 'Nothing recognised yet. Paste page 1 of the plan.';
+    $('impMsg').textContent = count ? `Found ${reqCount} of ${req.length} from page 1${parsed.sg != null ? ', plus fuel SG' : ''}.` : 'Nothing recognised yet. Paste page 1 of the plan.';
     $('impMsg').className = 'msg' + (count ? '' : ' warn');
     const s = cur();
     const other = s.v.flt && parsed.flt && s.v.flt !== parsed.flt;
@@ -874,6 +1253,7 @@ if (typeof module !== 'undefined') module.exports = PitchTables;
     put('flt', v.flt); put('std', v.std); put('sta', v.sta);
     put('zfw', v.zfw); put('tow', v.tow); put('ldw', v.ldw); put('fob', v.fob);
     put('fod', v.fod); put('lfod', v.fod); put('rsvAltn', v.rsvAltn); put('pld', v.pld);
+    if (v.sg != null) put('sg', String(v.sg));
     if (v.altn1) { put('altn1C', v.altn1.code); put('altn1F', v.altn1.fuel); }
     if (v.altn2) { put('altn2C', v.altn2.code); put('altn2F', v.altn2.fuel); }
     s.info = { dep: v.dep || s.info.dep, arr: v.arr || s.info.arr, ft: v.ft != null ? v.ft : s.info.ft };
